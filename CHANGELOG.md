@@ -5,6 +5,9 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+- **Empty start** - When there is nothing to restore (the first start, or after every pane was closed), Gantry opens on its empty screen with the New Claude session and New shell buttons, not a shell in the folder it was started from. `gantry --cwd DIR` and `gantry -- program` still open their tab.
+
 ## [0.9.0] - 2026-10-19
 
 First public release.
