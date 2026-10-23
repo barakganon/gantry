@@ -70,11 +70,12 @@ Close the window and your sessions continue, on this machine or on any SSH host.
 - **Sessions that outlive the window.** A per-profile daemon owns every PTY, so closing the GUI does not end your
   sessions. Reopen it and it reattaches. Finished panes offer Continue (`claude --resume`) or Restart.
 - **SSH hosts.** Connect to remote SSH hosts (currently Linux). Their sessions sit in the same sidebar, with the same
-  status colors, search and recent sessions.
+  status colors, search and recent sessions. [Setup guide](docs/ssh-hosts.md).
 - **Dev containers.** Sessions that run in a dev container are listed under their host folder and resumed inside it.
+  [Setup guide](docs/dev-containers.md).
 - **Take over.** Sessions running outside Gantry show up too, and can be taken over into a pane.
 - **Several Claude config dirs.** Work with more than one `CLAUDE_CONFIG_DIR` (personal, work, ...), each with its own
-  badge and color. A first-run wizard finds them for you.
+  badge and color. A first-run wizard finds them for you. [Setup guide](docs/claude-config-dirs.md).
 
 ## Make it yours
 
