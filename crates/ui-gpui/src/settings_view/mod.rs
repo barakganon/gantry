@@ -16,8 +16,10 @@ use gpui::{
     App, Bounds, Context, DispatchPhase, Div, ElementId, EventEmitter, FocusHandle, Focusable, FontWeight, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Render, ScrollHandle,
     SharedString, Stateful, Subscription, Window, canvas, deferred, div, point, prelude::*, px, relative, rgb, rgba,
+    svg,
 };
 
+use crate::assets::INFO_ICON;
 use crate::field;
 use crate::settings_store::SettingsStore;
 use crate::theme::{RADIUS, RADIUS_LARGE, RADIUS_SMALL, Theme, theme};
@@ -173,6 +175,9 @@ fn open_settings_file(path: &Path, cx: &App) {
 }
 
 type DropdownBounds = Rc<RefCell<HashMap<(&'static str, usize), Bounds<Pixels>>>>;
+
+/// Where the guides in `docs/` are read.
+const GUIDES_URL: &str = "https://github.com/idogrf/gantry/blob/main/docs/";
 
 type Handler = Rc<dyn Fn(&mut SettingsView, &mut Window, &mut Context<SettingsView>)>;
 
@@ -387,6 +392,30 @@ impl SettingsView {
             .rounded(px(RADIUS_SMALL))
             .bg(rgb(theme.tokens.raised))
             .text_sm()
+            .child(label)
+    }
+
+    /// An accent link (an i in a circle, then `label`) that opens the guide `file` under `docs/`.
+    fn guide_link(
+        &mut self,
+        name: &'static str,
+        label: &'static str,
+        file: &'static str,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = theme(cx).clone();
+        let url = format!("{GUIDES_URL}{file}");
+        self.pressable(name, 0, None, window, cx, handler(move |_, _, cx| cx.open_url(&url)))
+            .py(theme.ui(2.))
+            .px(theme.ui(2.))
+            .flex()
+            .items_center()
+            .gap(theme.ui(5.))
+            .rounded(px(RADIUS_SMALL))
+            .text_sm()
+            .text_color(rgb(theme.tokens.accent))
+            .child(svg().path(INFO_ICON).flex_none().size(theme.ui(14.)).text_color(rgb(theme.tokens.accent)))
             .child(label)
     }
 

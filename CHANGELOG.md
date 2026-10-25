@@ -7,9 +7,11 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 - **Install SSH hosts from a Mac** - The Add SSH host wizard and the ↑ update now upload gantryd from the macOS app too, which ships the Linux binary inside; no more installing it by hand.
+- **Guides in Settings** - Settings > Sessions has links (an i in a circle, then the guide's name) to the config dirs and dev containers guides under the Claude config dirs note, and Settings > SSH hosts one to the SSH hosts guide.
 
 ### Changed
 - **Claude typed into a terminal pane** - A Claude you start in a Gantry terminal pane is now that pane's session: the row shows its status colors and alerts instead of a second "Running outside Gantry" row, and turns back into a plain terminal when Claude exits. Needs a daemon restart.
+- **Tighter terminal lines** - The default terminal line height is 1.2 (was 1.3), so the Claude logo no longer splits; a line height you set yourself is kept.
 
 ### Fixed
 - **Wrapped Claude launchers** - A Claude started through a wrapper (a launcher that starts the real `claude` as a child) is now recognized as the pane's session: it shows its status colors and no longer appears a second time as "Running outside Gantry" (on macOS it was shown as closed). Needs a daemon restart.

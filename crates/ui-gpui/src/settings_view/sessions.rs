@@ -634,9 +634,20 @@ impl SettingsView {
                 .detach();
             }),
         );
+        let guides = div()
+            .flex()
+            .flex_wrap()
+            .gap_x(theme.ui(14.))
+            .mt(theme.ui(6.))
+            .child(self.guide_link("guide-config-dirs", "Config dirs guide", "claude-config-dirs.md", window, cx))
+            .child(self.guide_link("guide-dev-containers", "Dev containers guide", "dev-containers.md", window, cx));
         rows.push(row_shell(
             theme,
-            muted(theme, "Dev containers always run plain claude; the arguments still apply. Gantry never writes inside these folders."),
+            muted(
+                theme,
+                "Dev containers always run plain claude; the arguments still apply. Gantry never writes inside these folders.",
+            )
+            .child(guides),
             add,
             empty_slot(theme),
         ));

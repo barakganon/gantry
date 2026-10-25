@@ -37,6 +37,9 @@ pub(crate) const LOGO: &str = "icons/gantry.png";
 /// Gantry's embedded assets.
 pub(crate) struct Assets;
 
+/// The guide link's icon (an i in a circle), drawn by `settings_view::guide_link`.
+pub(crate) const INFO_ICON: &str = "icons/info.svg";
+
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
@@ -48,6 +51,7 @@ impl AssetSource for Assets {
             ARROW_DOWN_ICON => Some(include_bytes!("../assets/icons/arrow-down.svg")),
             PROMPT_ICON => Some(include_bytes!("../assets/icons/prompt.svg")),
             PIN_ICON => Some(include_bytes!("../assets/icons/pin.svg")),
+            INFO_ICON => Some(include_bytes!("../assets/icons/info.svg")),
             BRANCH_ICON => Some(include_bytes!("../assets/icons/branch.svg")),
             LOGO => Some(include_bytes!("../assets/icons/gantry.png")),
             _ => None,
@@ -65,6 +69,7 @@ impl AssetSource for Assets {
             ARROW_DOWN_ICON.into(),
             PROMPT_ICON.into(),
             PIN_ICON.into(),
+            INFO_ICON.into(),
             LOGO.into(),
         ])
     }
@@ -85,6 +90,7 @@ mod tests {
             ARROW_DOWN_ICON,
             PROMPT_ICON,
             PIN_ICON,
+            INFO_ICON,
         ] {
             let bytes = Assets.load(icon).unwrap().expect("embedded");
             assert!(std::str::from_utf8(&bytes).unwrap().starts_with("<svg"), "{icon}");
