@@ -5,6 +5,9 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+- **Wrapped Claude launchers** - A Claude started through a wrapper (a launcher that starts the real `claude` as a child) is now recognized as the pane's session: it shows its status colors and no longer appears a second time as "Running outside Gantry" (on macOS it was shown as closed). Needs a daemon restart.
+
 ## [0.10.0] - 2026-10-22
 
 ### Added
