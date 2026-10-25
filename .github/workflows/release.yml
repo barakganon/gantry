@@ -1,7 +1,8 @@
 name: Release
 # A v* tag builds the Linux tarball and the macOS dmg, then publishes the GitHub Release with SHA256SUMS and build
 # attestations. Run by hand (Actions → Release → Run workflow) to build without publishing. The macOS job costs 10×
-# minutes in a private repo, so switch it off by hand when only the Linux job is being tested.
+# minutes in a private repo, so switch it off by hand when only the Linux job is being tested. The macOS job packs the
+# Linux job's gantryd into Gantry.app, so asking for macOS also builds Linux.
 on:
   push:
     tags: ['v*']
@@ -41,7 +42,7 @@ jobs:
 
   linux:
     needs: check
-    if: github.event_name == 'push' || inputs.linux
+    if: github.event_name == 'push' || inputs.linux || inputs.macos
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -56,12 +57,21 @@ jobs:
           if-no-files-found: error
 
   macos:
-    needs: check
+    needs: [check, linux]
     if: github.event_name == 'push' || inputs.macos
     runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: gantry-linux
+          path: dist/linux
+      - name: The Linux gantryd for Gantry.app
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          tar -xzf "dist/linux/gantry-$version-x86_64-linux.tar.gz" -C dist/linux "gantry-$version/gantryd"
+          echo "GANTRYD_LINUX=$PWD/dist/linux/gantry-$version/gantryd" >> "$GITHUB_ENV"
       - name: Toolchain from rust-toolchain.toml
         run: rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

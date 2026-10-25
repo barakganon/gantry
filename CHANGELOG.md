@@ -5,6 +5,9 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+- **Install SSH hosts from a Mac** - The Add SSH host wizard and the ↑ update now upload gantryd from the macOS app too, which ships the Linux binary inside; no more installing it by hand.
+
 ### Fixed
 - **Wrapped Claude launchers** - A Claude started through a wrapper (a launcher that starts the real `claude` as a child) is now recognized as the pane's session: it shows its status colors and no longer appears a second time as "Running outside Gantry" (on macOS it was shown as closed). Needs a daemon restart.
 - **"No viable candidates found in PATH" on macOS** - Claude panes start again when Gantry is opened from Finder or the Dock and your shell takes a few seconds to start: Gantry now waits up to 20 s for your shell's environment (was 5 s), and if it still can't read it, it adds `~/.local/bin`, Homebrew and the system folders to the PATH. Needs a daemon restart.
