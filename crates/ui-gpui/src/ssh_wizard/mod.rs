@@ -175,13 +175,24 @@ fn headless_beside(exe: &std::path::Path) -> std::path::PathBuf {
     exe.with_file_name("gantryd")
 }
 
-/// The file to upload: `gantryd` beside this Gantry, provided it is this Gantry's version (after a reinstall the file
-/// beside the running one may be newer).
+/// Where the Linux x86_64 `gantryd` sits inside the macOS app: `Contents/Resources/gantryd-linux-x86_64`, next to the
+/// `Contents/MacOS` folder of the executable.
+fn headless_in_bundle(exe: &std::path::Path) -> std::path::PathBuf {
+    let contents = exe.parent().and_then(std::path::Path::parent).unwrap_or(exe);
+    contents.join("Resources/gantryd-linux-x86_64")
+}
+
+/// The file to upload. On Linux: `gantryd` beside this Gantry, provided it is this Gantry's version (after a reinstall
+/// the file beside the running one may be newer). On macOS: the Linux `gantryd` packed in the app bundle, which a Mac
+/// cannot run, so its version is checked on the host after the upload (`host_install::check_installed`).
 fn headless_binary() -> Result<std::path::PathBuf, String> {
     let exe = std::env::current_exe().map_err(|_| "Could not find this Gantry's own file.".to_string())?;
-    let path = headless_beside(&exe);
+    let path = if cfg!(target_os = "macos") { headless_in_bundle(&exe) } else { headless_beside(&exe) };
     if !path.is_file() {
         return Err(format!("{} is missing: install Gantry again.", path.display()));
+    }
+    if cfg!(target_os = "macos") {
+        return Ok(path);
     }
     let output = std::process::Command::new(&path).arg("--version").output().ok();
     let found = output
@@ -198,9 +209,10 @@ fn headless_binary() -> Result<std::path::PathBuf, String> {
     }
 }
 
-/// Why this Gantry cannot upload itself to a host whose remote command is `command`, if it cannot.
+/// Why this Gantry cannot upload itself to a host whose remote command is `command`, if it cannot. A Linux x86_64
+/// Gantry uploads its `gantryd`, a macOS one the Linux `gantryd` in its bundle.
 pub(crate) fn upload_block(command: &str) -> Option<String> {
-    if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+    if !cfg!(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos")) {
         return Some("This Gantry cannot be uploaded to a Linux x86_64 host: install it by hand.".into());
     }
     upload_path(command).err()
@@ -1089,19 +1101,27 @@ impl Render for SshWizard {
 mod tests {
     use super::*;
 
-    // The upload needs a Linux x86_64 Gantry; elsewhere `upload_block` refuses every command.
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    // The upload needs a Linux x86_64 or macOS Gantry; elsewhere `upload_block` refuses every command.
+    #[cfg(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos"))]
     #[test]
     fn upload_block_refuses_a_command_with_shell_syntax() {
         assert!(upload_block("env X=1 gantryd").is_some());
         assert!(upload_block("$HOME/gantryd").is_some());
     }
 
-    // As above: Linux x86_64 only.
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    // As above: a Linux x86_64 or macOS Gantry.
+    #[cfg(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos"))]
     #[test]
     fn upload_block_accepts_a_plain_path() {
         assert_eq!(upload_block("~/.local/bin/gantryd"), None);
+    }
+
+    #[test]
+    fn the_bundled_gantryd_sits_in_the_app_resources() {
+        assert_eq!(
+            headless_in_bundle(Path::new("/Applications/Gantry.app/Contents/MacOS/gantry")),
+            Path::new("/Applications/Gantry.app/Contents/Resources/gantryd-linux-x86_64"),
+        );
     }
 
     #[test]
