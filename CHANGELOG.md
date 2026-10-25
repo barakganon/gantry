@@ -5,6 +5,8 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-25
+
 ### Added
 - **Install SSH hosts from a Mac** - The Add SSH host wizard and the ↑ update now upload gantryd from the macOS app too, which ships the Linux binary inside; no more installing it by hand.
 - **Guides in Settings** - Settings > Sessions has links (an i in a circle, then the guide's name) to the config dirs and dev containers guides under the Claude config dirs note, and Settings > SSH hosts one to the SSH hosts guide.
