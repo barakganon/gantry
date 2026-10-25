@@ -263,9 +263,16 @@ impl SettingsView {
         }
         let add =
             self.button("ssh-add", 0, "Add host…", window, cx, handler(|_, _, cx| cx.emit(SettingsEvent::AddSshHost)));
+        let guide = div().flex().mt(theme.ui(6.)).child(self.guide_link(
+            "guide-ssh-hosts",
+            "SSH hosts guide",
+            "ssh-hosts.md",
+            window,
+            cx,
+        ));
         rows.push(row_shell(
             theme,
-            muted(theme, "Pick a host from your ssh config, and Gantry installs itself there."),
+            muted(theme, "Pick a host from your ssh config, and Gantry installs itself there.").child(guide),
             add,
             empty_slot(theme),
         ));

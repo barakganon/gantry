@@ -5,6 +5,12 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+- **Guides in Settings** - Settings > Sessions has links (an i in a circle, then the guide's name) to the config dirs and dev containers guides under the Claude config dirs note, and Settings > SSH hosts one to the SSH hosts guide.
+
+### Changed
+- **Tighter terminal lines** - The default terminal line height is 1.2 (was 1.3), so the Claude logo no longer splits; a line height you set yourself is kept.
+
 ## [0.10.0] - 2026-10-22
 
 ### Added

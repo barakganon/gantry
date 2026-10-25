@@ -458,7 +458,7 @@ impl Default for Settings {
             theme: ThemeChoice::Mist,
             status_fills: StatusFills::default(),
             selection: None,
-            terminal_font: TerminalFont { family: None, size: 14.0, line_height: 1.3 },
+            terminal_font: TerminalFont { family: None, size: 14.0, line_height: 1.2 },
             ui_font_size: 14.0,
             alerts: AlertSettings {
                 needs_input: EventAlerts { badge: true, notification: true, sound: true, tone: AlertTone::FallingBlip },
@@ -869,7 +869,7 @@ impl Reader {
         let terminal_font = TerminalFont {
             family,
             size: self.number(&font, "terminalFont.", "size", 14.0, (8.0, 40.0)) as f32,
-            line_height: self.number(&font, "terminalFont.", "lineHeight", 1.3, (1.0, 2.0)) as f32,
+            line_height: self.number(&font, "terminalFont.", "lineHeight", 1.2, (1.0, 2.0)) as f32,
         };
 
         let ui_font_size = self.number(raw, "", "uiFontSize", 14.0, (11.0, 20.0)) as f32;
@@ -1338,7 +1338,7 @@ mod tests {
         assert_eq!(s.theme, ThemeChoice::Mist);
         assert_eq!(
             (s.terminal_font.size, s.terminal_font.line_height, s.terminal_font.family.clone()),
-            (14.0, 1.3, None)
+            (14.0, 1.2, None)
         );
         assert_eq!(s.ui_font_size, 14.0);
         assert_eq!(s.alerts.finished_after_seconds, 3);
