@@ -10,8 +10,8 @@ window or lose the connection.
   password).
 - **On the remote:** Linux x86_64, and Claude Code installed and logged in for the remote user.
 - **A `gantryd` on the remote.** This is a small headless daemon that owns the remote sessions. It needs no window or
-  sound libraries. The Add SSH host wizard uploads it for you, as long as you run Gantry on Linux x86_64. From a
-  Mac you have to install `gantryd` on the remote by hand.
+  sound libraries. The Add SSH host wizard uploads it for you, from Gantry on Linux x86_64 or on a Mac (the macOS
+  app carries the Linux `gantryd` inside).
 
 ## Add a host
 
@@ -25,9 +25,9 @@ window or lose the connection.
      method.
 3. **Check:** Gantry connects once and looks at the remote. It reports whether the remote is Linux x86_64, whether
    `gantryd` is missing, older, the same or newer than this Gantry, and whether lingering is on (see below).
-4. **Install:** if `gantryd` is missing or older, Gantry uploads the one that sits next to the running `gantry`. The
-   remote moves it into place only after the byte count (and the sha256, where `sha256sum` exists) match, then runs
-   `--version` to verify. If the remote is missing a library, the error lists every one of them with a single
+4. **Install:** if `gantryd` is missing or older, Gantry uploads the one that sits next to the running `gantry` (on a Mac, the
+   Linux one inside `Gantry.app`). The remote moves it into place only after the byte count (and the sha256, where
+   `sha256sum` exists) match, then runs `--version` to verify; it must report this Gantry's version. If the remote is missing a library, the error lists every one of them with a single
    `apt install` line.
 5. **Finish:** Gantry offers to run `loginctl enable-linger` for you, then saves the host and connects.
 

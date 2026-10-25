@@ -175,32 +175,63 @@ fn headless_beside(exe: &std::path::Path) -> std::path::PathBuf {
     exe.with_file_name("gantryd")
 }
 
-/// The file to upload: `gantryd` beside this Gantry, provided it is this Gantry's version (after a reinstall the file
-/// beside the running one may be newer).
+/// Where the Linux x86_64 `gantryd` sits inside the macOS app: `Contents/Resources/gantryd-linux-x86_64`, next to the
+/// `Contents/MacOS` folder of the executable.
+fn headless_in_bundle(exe: &std::path::Path) -> std::path::PathBuf {
+    let contents = exe.parent().and_then(std::path::Path::parent).unwrap_or(exe);
+    contents.join("Resources/gantryd-linux-x86_64")
+}
+
+/// The bundle's `Contents/Info.plist`, next to the `Contents/MacOS` folder of the executable.
+fn info_plist_in_bundle(exe: &std::path::Path) -> std::path::PathBuf {
+    let contents = exe.parent().and_then(std::path::Path::parent).unwrap_or(exe);
+    contents.join("Info.plist")
+}
+
+/// The `CFBundleShortVersionString` of an `Info.plist`: the `<string>` right after its key.
+fn bundle_version(plist: &str) -> Option<&str> {
+    let rest = plist.split_once("<key>CFBundleShortVersionString</key>")?.1.trim_start();
+    let rest = rest.strip_prefix("<string>")?;
+    Some(rest.split_once("</string>")?.0.trim())
+}
+
+/// The file to upload. On Linux: `gantryd` beside this Gantry, provided it is this Gantry's version (after a reinstall
+/// the file beside the running one may be newer). On macOS: the Linux `gantryd` packed in the app bundle, which a Mac
+/// cannot run, so the bundle's version (its `Info.plist`) must be this Gantry's, as a replaced app may be newer; the
+/// uploaded file's own version is checked on the host after the upload (`host_install::check_installed`).
 fn headless_binary() -> Result<std::path::PathBuf, String> {
     let exe = std::env::current_exe().map_err(|_| "Could not find this Gantry's own file.".to_string())?;
-    let path = headless_beside(&exe);
+    let macos = cfg!(target_os = "macos");
+    let path = if macos { headless_in_bundle(&exe) } else { headless_beside(&exe) };
     if !path.is_file() {
         return Err(format!("{} is missing: install Gantry again.", path.display()));
     }
-    let output = std::process::Command::new(&path).arg("--version").output().ok();
-    let found = output
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .and_then(|text| parse_version_output(text.trim()))
-        .map(|version| version.to_string());
+    let (found, unreadable) = if macos {
+        let plist = info_plist_in_bundle(&exe);
+        let found = std::fs::read_to_string(&plist).ok().and_then(|text| bundle_version(&text).map(str::to_string));
+        (found, format!("{} does not say its version: install Gantry again.", plist.display()))
+    } else {
+        let output = std::process::Command::new(&path).arg("--version").output().ok();
+        let found = output
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .and_then(|text| parse_version_output(text.trim()))
+            .map(|version| version.to_string());
+        (found, format!("{} does not run: install Gantry again.", path.display()))
+    };
     match found {
         Some(version) if version == protocol::build::VERSION => Ok(path),
         Some(version) => Err(format!(
             "The installed gantryd is {version}, this Gantry is {}: restart Gantry, then try again.",
             protocol::build::VERSION
         )),
-        None => Err(format!("{} does not run: install Gantry again.", path.display())),
+        None => Err(unreadable),
     }
 }
 
-/// Why this Gantry cannot upload itself to a host whose remote command is `command`, if it cannot.
+/// Why this Gantry cannot upload itself to a host whose remote command is `command`, if it cannot. A Linux x86_64
+/// Gantry uploads its `gantryd`, a macOS one the Linux `gantryd` in its bundle.
 pub(crate) fn upload_block(command: &str) -> Option<String> {
-    if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+    if !cfg!(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos")) {
         return Some("This Gantry cannot be uploaded to a Linux x86_64 host: install it by hand.".into());
     }
     upload_path(command).err()
@@ -1089,19 +1120,43 @@ impl Render for SshWizard {
 mod tests {
     use super::*;
 
-    // The upload needs a Linux x86_64 Gantry; elsewhere `upload_block` refuses every command.
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    // The upload needs a Linux x86_64 or macOS Gantry; elsewhere `upload_block` refuses every command.
+    #[cfg(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos"))]
     #[test]
     fn upload_block_refuses_a_command_with_shell_syntax() {
         assert!(upload_block("env X=1 gantryd").is_some());
         assert!(upload_block("$HOME/gantryd").is_some());
     }
 
-    // As above: Linux x86_64 only.
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    // As above: a Linux x86_64 or macOS Gantry.
+    #[cfg(any(all(target_os = "linux", target_arch = "x86_64"), target_os = "macos"))]
     #[test]
     fn upload_block_accepts_a_plain_path() {
         assert_eq!(upload_block("~/.local/bin/gantryd"), None);
+    }
+
+    #[test]
+    fn the_bundled_gantryd_sits_in_the_app_resources() {
+        assert_eq!(
+            headless_in_bundle(Path::new("/Applications/Gantry.app/Contents/MacOS/gantry")),
+            Path::new("/Applications/Gantry.app/Contents/Resources/gantryd-linux-x86_64"),
+        );
+    }
+
+    #[test]
+    fn the_bundle_info_plist_sits_in_contents() {
+        assert_eq!(
+            info_plist_in_bundle(Path::new("/Applications/Gantry.app/Contents/MacOS/gantry")),
+            Path::new("/Applications/Gantry.app/Contents/Info.plist"),
+        );
+    }
+
+    #[test]
+    fn the_bundle_version_is_read_from_info_plist() {
+        let plist = "<dict>\n  <key>CFBundleShortVersionString</key>\n  <string>0.11.0</string>\n</dict>";
+        assert_eq!(bundle_version(plist), Some("0.11.0"));
+        assert_eq!(bundle_version("<dict><key>CFBundleName</key><string>Gantry</string></dict>"), None);
+        assert_eq!(bundle_version("<key>CFBundleShortVersionString</key><true/>"), None);
     }
 
     #[test]

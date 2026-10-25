@@ -9,8 +9,14 @@ use interprocess::local_socket::tokio::{Stream, prelude::*};
 
 use crate::paths::Paths;
 use crate::server::{ServerOptions, serve};
+#[cfg(target_os = "macos")]
+use crate::shell_env::{fallback_path, parse_path_helper};
 #[cfg(unix)]
 use crate::shell_env::{resolve_login_env, shell_quote};
+
+/// How long the login shell may take to print its environment (shells loading nvm, conda or SDKs take seconds).
+#[cfg(unix)]
+const LOGIN_ENV_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// How `run_daemon` ended.
 #[derive(Debug)]
@@ -112,12 +118,28 @@ fn login_env_or_current() -> Vec<(String, String)> {
     #[cfg(unix)]
     if let (Ok(shell), Ok(exe)) = (std::env::var("SHELL"), std::env::current_exe()) {
         let printer = format!("{} internal-print-env", shell_quote(&exe.to_string_lossy()));
-        if let Some(env) = resolve_login_env(&shell, &printer, Duration::from_secs(5)) {
+        if let Some(env) = resolve_login_env(&shell, &printer, LOGIN_ENV_TIMEOUT) {
             return env;
         }
         tracing::warn!("login shell environment unavailable; using the daemon's own environment");
     }
+    #[cfg(target_os = "macos")]
+    return with_fallback_path(std::env::vars().collect());
+    #[cfg(not(target_os = "macos"))]
     std::env::vars().collect()
+}
+
+/// Replace the bare `PATH` of an app opened from Finder with [`fallback_path`].
+#[cfg(target_os = "macos")]
+fn with_fallback_path(mut env: Vec<(String, String)>) -> Vec<(String, String)> {
+    let helper = std::process::Command::new("/usr/libexec/path_helper").arg("-s").output().ok();
+    let system = helper.as_ref().and_then(|out| parse_path_helper(std::str::from_utf8(&out.stdout).ok()?));
+    let home = env.iter().find(|(key, _)| key == "HOME").map(|(_, value)| value.clone()).unwrap_or_default();
+    let current = env.iter().find(|(key, _)| key == "PATH").map(|(_, value)| value.clone()).unwrap_or_default();
+    let path = fallback_path(&home, system, &current);
+    env.retain(|(key, _)| key != "PATH");
+    env.push(("PATH".into(), path));
+    env
 }
 
 /// Start `<this executable> daemon` fully detached from the caller.

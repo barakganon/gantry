@@ -23,6 +23,7 @@ use tokio::sync::Notify;
 use crate::containers::{self, PANE_MARKER, Registry, marker};
 use crate::outbox::Outbox;
 use crate::paste_image;
+use crate::process_tree;
 use crate::pty::{PtyProcess, SpawnSpec, drain_batch, spawn_output_reader};
 use crate::search::{Search, SearchEvent};
 use crate::sessions::{ContainerView, Gone, PaneSession, diff, merge_records, resolve, spawn_indexer, still_claimed};
@@ -120,6 +121,12 @@ struct State {
     marked: HashMap<u32, PaneId>,
     /// Container processes already checked and found carrying no marker of ours.
     unmarked: HashSet<u32>,
+    /// Running pid-file processes (host pid) that descend from a pane's process.
+    owned: HashMap<u32, PaneId>,
+    /// Running pid-file processes already checked and found descending from no pane.
+    unowned: HashSet<u32>,
+    /// The pane processes `unowned` was checked against.
+    owner_panes: HashMap<u32, PaneId>,
     /// Containers to look inside for this daemon's markers (processes the host cannot read, e.g. root's).
     probe_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     /// When unknown container ids last caused a Docker lookup.
@@ -208,6 +215,7 @@ impl State {
     fn publish_sessions(&mut self, full: bool) {
         let Some(records) = self.records.clone().filter(|_| self.sessions_enabled) else { return };
         self.refresh_marks(&records);
+        self.refresh_owned(&records);
         let panes: Vec<PaneSession> = self
             .panes
             .iter()
@@ -216,6 +224,7 @@ impl State {
         let view = ContainerView {
             registry: &self.registry,
             marked: &self.marked,
+            owned: &self.owned,
             dir_exists: &|dir: &Path| dir.is_dir(),
             checks_processes: cfg!(target_os = "linux"),
         };
@@ -236,6 +245,44 @@ impl State {
         if self.dirs_pending && self.indexers.keys().all(|dir| self.dir_records.contains_key(dir)) {
             self.dirs_pending = false;
             self.control(&DaemonMessage::ClaudeDirsIndexed);
+        }
+    }
+
+    /// Find which running pid-file processes descend from a pane's process (a Claude started through a wrapper).
+    /// `ps` runs only while such a process, not a pane's own, has not been checked yet.
+    fn refresh_owned(&mut self, records: &[SessionRecord]) {
+        let pane_pids: HashMap<u32, PaneId> =
+            self.panes.iter().filter_map(|(id, p)| Some((p.pty.pid()?, *id))).collect();
+        let live: HashSet<u32> = records
+            .iter()
+            .filter_map(|r| match r.state {
+                IndexState::Running { pid } if !pane_pids.contains_key(&pid) => Some(pid),
+                _ => None,
+            })
+            .collect();
+        self.owned.retain(|pid, pane| live.contains(pid) && self.panes.contains_key(pane));
+        self.unowned.retain(|pid| live.contains(pid));
+        if self.owner_panes != pane_pids {
+            self.unowned.clear();
+            self.owner_panes = pane_pids.clone();
+        }
+        if pane_pids.is_empty() || live.iter().all(|pid| self.owned.contains_key(pid) || self.unowned.contains(pid)) {
+            return;
+        }
+        let Some(parents) = process_tree::read_parents() else {
+            // No ancestry information; try again once something changes.
+            self.unowned.extend(live);
+            return;
+        };
+        for pid in live {
+            match process_tree::owner(pid, &parents, &pane_pids) {
+                Some(pane) => {
+                    self.owned.insert(pid, pane);
+                }
+                None => {
+                    self.unowned.insert(pid);
+                }
+            }
         }
     }
 

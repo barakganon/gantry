@@ -1,6 +1,10 @@
 #!/bin/sh
 # Build the release binary and pack dist/gantry-<version>-aarch64-macos.dmg (run on an Apple Silicon Mac, by hand or by .github/workflows/release.yml).
+# GANTRYD_LINUX = the Linux x86_64 gantryd of this version (from its tarball); it goes into the app for the SSH wizard.
 set -eu
+# The Linux x86_64 gantryd of this version (from its tarball), which the SSH wizard uploads from a Mac.
+gantryd_linux=${GANTRYD_LINUX:?set GANTRYD_LINUX to the Linux x86_64 gantryd of this version}
+test -f "$gantryd_linux"
 root=$(cd "$(dirname "$0")/../.." && pwd)
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$root/Cargo.toml" | head -n 1)
 cd "$root"
@@ -9,6 +13,7 @@ app=$root/dist/Gantry.app
 rm -rf "$app" "$root/dist/dmg"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$root/dist/dmg"
 install -m0755 target/release/gantry "$app/Contents/MacOS/gantry"
+install -m0755 "$gantryd_linux" "$app/Contents/Resources/gantryd-linux-x86_64"
 sed "s/@VERSION@/$version/" packaging/macos/Info.plist > "$app/Contents/Info.plist"
 # icon-1024.png is rendered from the Linux SVG; iconutil wants every size up to 1024 (@2x = double).
 iconset=$root/dist/Gantry.iconset

@@ -48,6 +48,8 @@ pub struct ContainerView<'a> {
     pub registry: &'a Registry,
     /// Host pid → the pane whose `GANTRY_PANE` marker that container process carries.
     pub marked: &'a HashMap<u32, PaneId>,
+    /// Pid file pid → the pane whose process it descends from (a Claude started through a wrapper).
+    pub owned: &'a HashMap<u32, PaneId>,
     /// Whether a host directory exists.
     pub dir_exists: &'a dyn Fn(&Path) -> bool,
     /// Whether this OS can tell if a pid file's process still runs. Without it a running record no pane owns may be
@@ -55,10 +57,10 @@ pub struct ContainerView<'a> {
     pub checks_processes: bool,
 }
 
-/// Combine index records with panes. A running record whose process is a pane's process — or, in a container,
-/// carries a pane's marker — is managed by that pane. The session a pane was started with is managed by it while
-/// that pane has no running record of its own (Claude has not written its pid file yet); once it has one (e.g.
-/// after `/clear`), the start session is closed. A record whose process is `gone` counts as closed: the index has
+/// Combine index records with panes. A running record whose process is a pane's process or descends from it — or, in
+/// a container, carries a pane's marker — is managed by that pane. The session a pane was started with is managed by
+/// it while that pane has no running record of its own (Claude has not written its pid file yet); once it has one
+/// (e.g. after `/clear`), the start session is closed. A record whose process is `gone` counts as closed: the index has
 /// not noticed the exit yet. Container sessions report their host directory when it is known.
 pub fn resolve(
     records: &[SessionRecord],
@@ -74,7 +76,7 @@ pub fn resolve(
     };
     let by_pid: HashMap<u32, PaneId> = panes.iter().filter_map(|p| Some((p.pid?, p.pane))).collect();
     let running_pane = |state: IndexState| match state {
-        IndexState::Running { pid } => by_pid.get(&pid).copied(),
+        IndexState::Running { pid } => by_pid.get(&pid).or_else(|| view.owned.get(&pid)).copied(),
         IndexState::InContainer { pid: Some(pid) } => view.marked.get(&pid).copied(),
         _ => None,
     };
@@ -206,7 +208,13 @@ mod tests {
             records,
             panes,
             gone,
-            &ContainerView { registry: &registry, marked: &marked, dir_exists: &|_| true, checks_processes: true },
+            &ContainerView {
+                registry: &registry,
+                marked: &marked,
+                owned: &HashMap::new(),
+                dir_exists: &|_| true,
+                checks_processes: true,
+            },
         )
     }
 
@@ -309,12 +317,64 @@ mod tests {
         let panes = [PaneSession { pane: 1, pid: Some(7), session_arg: None }];
         let registry = Registry::default();
         let marked = HashMap::new();
-        let view =
-            ContainerView { registry: &registry, marked: &marked, dir_exists: &|_| true, checks_processes: false };
+        let view = ContainerView {
+            registry: &registry,
+            marked: &marked,
+            owned: &HashMap::new(),
+            dir_exists: &|_| true,
+            checks_processes: false,
+        };
         assert_eq!(
             states(&resolve(&records, &panes, &[], &view)),
             vec![("outside", SessionState::Closed), ("mine", SessionState::Managed { pane: 1 })]
         );
+    }
+
+    /// `resolve` where pid 77028 and 76638 descend from panes 1 (pid 77017) and 2 (pid 76623).
+    fn wrapped(records: &[SessionRecord], panes: &[PaneSession], checks_processes: bool) -> Vec<SessionInfo> {
+        let (registry, marked) = (Registry::default(), HashMap::new());
+        let owned = HashMap::from([(77028, 1), (76638, 2)]);
+        let view = ContainerView {
+            registry: &registry,
+            marked: &marked,
+            owned: &owned,
+            dir_exists: &|_| true,
+            checks_processes,
+        };
+        resolve(records, panes, &[], &view)
+    }
+
+    #[test]
+    fn a_wrapped_claude_is_managed_by_the_pane_it_descends_from() {
+        let mut busy = record("f67f", IndexState::Running { pid: 77028 });
+        (busy.activity, busy.activity_since_ms) = (Some(Activity::Busy), 50);
+        let panes = [pane(1, 77017, Some("f67f"))];
+        for checks_processes in [true, false] {
+            let sessions = wrapped(std::slice::from_ref(&busy), &panes, checks_processes);
+            assert_eq!(states(&sessions), vec![("f67f", SessionState::Managed { pane: 1 })]);
+            assert_eq!(sessions[0].status, Some(SessionStatus::Busy));
+        }
+    }
+
+    #[test]
+    fn a_wrapped_claude_that_changed_session_closes_the_launch_session() {
+        let records = [record("8cb3", IndexState::Closed), record("ecfb", IndexState::Running { pid: 76638 })];
+        let panes = [pane(2, 76623, Some("8cb3"))];
+        assert_eq!(
+            states(&wrapped(&records, &panes, true)),
+            vec![("8cb3", SessionState::Closed), ("ecfb", SessionState::Managed { pane: 2 })]
+        );
+    }
+
+    #[test]
+    fn a_claude_started_elsewhere_stays_outside() {
+        let records = [record("warp", IndexState::Running { pid: 31833 })];
+        let panes = [pane(1, 77017, None)];
+        assert_eq!(
+            states(&wrapped(&records, &panes, true)),
+            vec![("warp", SessionState::External { pid: Some(31833) })]
+        );
+        assert_eq!(states(&wrapped(&records, &panes, false)), vec![("warp", SessionState::Closed)]);
     }
 
     #[test]
@@ -368,8 +428,13 @@ mod tests {
             record("launched", IndexState::Closed),
         ];
         let (registry, marked) = (Registry::default(), HashMap::from([(9007, 4)]));
-        let view =
-            ContainerView { registry: &registry, marked: &marked, dir_exists: &|_| true, checks_processes: true };
+        let view = ContainerView {
+            registry: &registry,
+            marked: &marked,
+            owned: &HashMap::new(),
+            dir_exists: &|_| true,
+            checks_processes: true,
+        };
         // Pane 4 was started as `launched`, then `/clear`ed into `boxed`: the launch session is closed.
         let sessions = resolve(&records, &[pane(4, 100, Some("launched"))], &[], &view);
         assert_eq!(
@@ -413,7 +478,13 @@ mod tests {
             &[boxed],
             &[],
             &[],
-            &ContainerView { registry: &registry, marked: &marked, dir_exists: &exists, checks_processes: true },
+            &ContainerView {
+                registry: &registry,
+                marked: &marked,
+                owned: &HashMap::new(),
+                dir_exists: &exists,
+                checks_processes: true,
+            },
         )
         .remove(0);
         assert_eq!((info.cwd.as_path(), info.cwd_exists), (std::path::Path::new("/home/u/app/src"), true));

@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use app_core::host_install::Probe;
+use app_core::host_install::{Probe, check_installed};
 use app_core::host_state::FailKind;
 use daemon::askpass::AskPrompt;
 use daemon::remote_install;
@@ -59,7 +59,7 @@ pub(crate) fn probe(spec: SshHostSpec, questions: &Questions) -> Job {
     })
 }
 
-/// Upload this binary, then ask the remote for its version.
+/// Upload this binary, then ask the remote for its version and check it is this Gantry's.
 pub(crate) fn install(spec: SshHostSpec, questions: &Questions, local: PathBuf) -> Job {
     let questions = questions.clone();
     spawn(move |handle, tx| {
@@ -67,7 +67,12 @@ pub(crate) fn install(spec: SshHostSpec, questions: &Questions, local: PathBuf) 
         let uploaded = remote_install::upload("ssh", &spec, questions.attempt(), handle, &local, &mut |sent| {
             let _ = progress.send_blocking(Msg::Progress(sent));
         });
-        let result = uploaded.and_then(|()| remote_install::verify("ssh", &spec, questions.attempt(), handle));
+        let result = uploaded
+            .and_then(|()| remote_install::verify("ssh", &spec, questions.attempt(), handle))
+            .and_then(|line| match check_installed(&line, protocol::build::VERSION) {
+                Ok(()) => Ok(line),
+                Err(reason) => Err(FailKind::Other { reason }),
+            });
         let _ = tx.send_blocking(Msg::Installed(result));
     })
 }

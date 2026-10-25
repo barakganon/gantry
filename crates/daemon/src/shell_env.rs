@@ -28,6 +28,27 @@ pub fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
+/// The `PATH` value in the output of macOS's `/usr/libexec/path_helper -s` (`PATH="…"; export PATH;`).
+pub fn parse_path_helper(stdout: &str) -> Option<&str> {
+    let (_, rest) = stdout.split_once("PATH=\"")?;
+    rest.split_once('"').map(|(path, _)| path)
+}
+
+/// A `PATH` for when the login shell cannot be read on macOS, where an app opened from Finder only gets
+/// `/usr/bin:/bin:/usr/sbin:/sbin`: where Claude's installer and Homebrew put programs, then `system` (from
+/// `path_helper`), then `current`; each folder once.
+pub fn fallback_path(home: &str, system: Option<&str>, current: &str) -> String {
+    let local = format!("{home}/.local/bin");
+    let first = [local.as_str(), "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"];
+    let mut folders: Vec<&str> = Vec::new();
+    for folder in first.into_iter().chain(system.unwrap_or_default().split(':')).chain(current.split(':')) {
+        if !folder.is_empty() && !folders.contains(&folder) {
+            folders.push(folder);
+        }
+    }
+    folders.join(":")
+}
+
 /// Run `shell -l -i -c "<marker>; <print_command>"` and parse its output; `None` on failure or timeout.
 pub fn resolve_login_env(shell: &str, print_command: &str, timeout: Duration) -> Option<Vec<(String, String)>> {
     let mut child = Command::new(shell)
@@ -67,6 +88,27 @@ mod tests {
     #[test]
     fn quoting_survives_single_quotes() {
         assert_eq!(shell_quote("/a b/it's"), r#"'/a b/it'\''s'"#);
+    }
+
+    #[test]
+    fn reads_path_helper_output() {
+        let stdout =
+            "PATH=\"/usr/local/bin:/usr/bin:/bin\"; export PATH;\nMANPATH=\"/usr/share/man:\"; export MANPATH;\n";
+        assert_eq!(parse_path_helper(stdout), Some("/usr/local/bin:/usr/bin:/bin"));
+        assert_eq!(parse_path_helper(""), None);
+    }
+
+    #[test]
+    fn fallback_path_puts_user_folders_first_once() {
+        let path = fallback_path("/Users/a", Some("/usr/local/bin:/usr/bin:/bin"), "/usr/bin:/bin:/usr/sbin:/sbin");
+        assert_eq!(
+            path,
+            "/Users/a/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        );
+        assert_eq!(
+            fallback_path("/h", None, "/bin"),
+            "/h/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/bin"
+        );
     }
 
     #[test]
