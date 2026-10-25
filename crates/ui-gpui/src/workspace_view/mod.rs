@@ -44,7 +44,7 @@ use crate::sidebar_view::{SidebarEvent, SidebarView};
 use crate::ssh_wizard::SshWizard;
 use crate::terminal_view::TerminalView;
 use crate::theme::Theme;
-use crate::update_watch::{self, DaemonBuild};
+use crate::update_watch::DaemonBuild;
 
 /// Space between split panes (and around them).
 const PANE_GAP: f32 = 8.0;
@@ -342,7 +342,7 @@ pub struct WorkspaceView {
     /// The daemon's version, if it sent one.
     daemon_version: Option<Version>,
     /// Watches `start_path`'s directory (Linux).
-    update_watch: Option<(RecommendedWatcher, Task<()>)>,
+    _update_watch: Option<(RecommendedWatcher, Task<()>)>,
     /// The open update card; its focus handle takes Esc.
     update_card: Option<FocusHandle>,
     /// Why Restart and update failed, shown in the card.
@@ -575,7 +575,7 @@ impl WorkspaceView {
             start_path: None,
             installed: None,
             daemon_version: None,
-            update_watch: None,
+            _update_watch: None,
             update_card: None,
             update_error: None,
             check_updates: cx.global::<SettingsStore>().settings().check_for_updates,
@@ -611,7 +611,7 @@ impl WorkspaceView {
         this.daemon_version = daemon_version.as_deref().and_then(Version::parse);
         #[cfg(target_os = "linux")]
         if let Some(path) = this.start_path.clone() {
-            this.update_watch = update_watch::watch(&path, cx);
+            this._update_watch = crate::update_watch::watch(&path, cx);
         }
         cx.set_global(CheckRow::default());
         this.release_task = Some(this.start_release_timer(cx));
