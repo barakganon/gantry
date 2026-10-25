@@ -9,7 +9,7 @@ use protocol::message::PaneId;
 /// Most parents followed from one process.
 const MAX_DEPTH: usize = 16;
 
-/// Parse the output of `ps -A -o pid=,ppid=` (two integers a line) into a pid → parent pid table. Lines that are not
+/// Parse the output of `ps -A -o pid= -o ppid=` (two integers a line) into a pid → parent pid table. Lines that are not
 /// two integers are skipped.
 pub fn parse_ps(output: &str) -> HashMap<u32, u32> {
     output
@@ -25,7 +25,7 @@ pub fn parse_ps(output: &str) -> HashMap<u32, u32> {
 /// Every process's parent, as `ps` reports it (the same on Linux and macOS). `None` when `ps` cannot be run.
 pub fn read_parents() -> Option<HashMap<u32, u32>> {
     let output = Command::new("ps")
-        .args(["-A", "-o", "pid=,ppid="])
+        .args(["-A", "-o", "pid=", "-o", "ppid="])
         .output()
         .map_err(|err| tracing::warn!("could not run ps: {err}"))
         .ok()?;
