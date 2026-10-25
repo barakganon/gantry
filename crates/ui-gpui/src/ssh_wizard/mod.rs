@@ -182,30 +182,49 @@ fn headless_in_bundle(exe: &std::path::Path) -> std::path::PathBuf {
     contents.join("Resources/gantryd-linux-x86_64")
 }
 
+/// The bundle's `Contents/Info.plist`, next to the `Contents/MacOS` folder of the executable.
+fn info_plist_in_bundle(exe: &std::path::Path) -> std::path::PathBuf {
+    let contents = exe.parent().and_then(std::path::Path::parent).unwrap_or(exe);
+    contents.join("Info.plist")
+}
+
+/// The `CFBundleShortVersionString` of an `Info.plist`: the `<string>` right after its key.
+fn bundle_version(plist: &str) -> Option<&str> {
+    let rest = plist.split_once("<key>CFBundleShortVersionString</key>")?.1.trim_start();
+    let rest = rest.strip_prefix("<string>")?;
+    Some(rest.split_once("</string>")?.0.trim())
+}
+
 /// The file to upload. On Linux: `gantryd` beside this Gantry, provided it is this Gantry's version (after a reinstall
 /// the file beside the running one may be newer). On macOS: the Linux `gantryd` packed in the app bundle, which a Mac
-/// cannot run, so its version is checked on the host after the upload (`host_install::check_installed`).
+/// cannot run, so the bundle's version (its `Info.plist`) must be this Gantry's, as a replaced app may be newer; the
+/// uploaded file's own version is checked on the host after the upload (`host_install::check_installed`).
 fn headless_binary() -> Result<std::path::PathBuf, String> {
     let exe = std::env::current_exe().map_err(|_| "Could not find this Gantry's own file.".to_string())?;
-    let path = if cfg!(target_os = "macos") { headless_in_bundle(&exe) } else { headless_beside(&exe) };
+    let macos = cfg!(target_os = "macos");
+    let path = if macos { headless_in_bundle(&exe) } else { headless_beside(&exe) };
     if !path.is_file() {
         return Err(format!("{} is missing: install Gantry again.", path.display()));
     }
-    if cfg!(target_os = "macos") {
-        return Ok(path);
-    }
-    let output = std::process::Command::new(&path).arg("--version").output().ok();
-    let found = output
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .and_then(|text| parse_version_output(text.trim()))
-        .map(|version| version.to_string());
+    let (found, unreadable) = if macos {
+        let plist = info_plist_in_bundle(&exe);
+        let found = std::fs::read_to_string(&plist).ok().and_then(|text| bundle_version(&text).map(str::to_string));
+        (found, format!("{} does not say its version: install Gantry again.", plist.display()))
+    } else {
+        let output = std::process::Command::new(&path).arg("--version").output().ok();
+        let found = output
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .and_then(|text| parse_version_output(text.trim()))
+            .map(|version| version.to_string());
+        (found, format!("{} does not run: install Gantry again.", path.display()))
+    };
     match found {
         Some(version) if version == protocol::build::VERSION => Ok(path),
         Some(version) => Err(format!(
             "The installed gantryd is {version}, this Gantry is {}: restart Gantry, then try again.",
             protocol::build::VERSION
         )),
-        None => Err(format!("{} does not run: install Gantry again.", path.display())),
+        None => Err(unreadable),
     }
 }
 
@@ -1122,6 +1141,22 @@ mod tests {
             headless_in_bundle(Path::new("/Applications/Gantry.app/Contents/MacOS/gantry")),
             Path::new("/Applications/Gantry.app/Contents/Resources/gantryd-linux-x86_64"),
         );
+    }
+
+    #[test]
+    fn the_bundle_info_plist_sits_in_contents() {
+        assert_eq!(
+            info_plist_in_bundle(Path::new("/Applications/Gantry.app/Contents/MacOS/gantry")),
+            Path::new("/Applications/Gantry.app/Contents/Info.plist"),
+        );
+    }
+
+    #[test]
+    fn the_bundle_version_is_read_from_info_plist() {
+        let plist = "<dict>\n  <key>CFBundleShortVersionString</key>\n  <string>0.11.0</string>\n</dict>";
+        assert_eq!(bundle_version(plist), Some("0.11.0"));
+        assert_eq!(bundle_version("<dict><key>CFBundleName</key><string>Gantry</string></dict>"), None);
+        assert_eq!(bundle_version("<key>CFBundleShortVersionString</key><true/>"), None);
     }
 
     #[test]
