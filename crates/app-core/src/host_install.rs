@@ -146,9 +146,30 @@ pub fn next_step(step: Step, check: &CheckResult) -> Step {
     }
 }
 
+/// Whether `line`, what the remote's `<command> --version` printed after an upload, is this Gantry's version `ours`.
+pub fn check_installed(line: &str, ours: &str) -> Result<(), String> {
+    match parse_version_output(line) {
+        Some(found) if found.to_string() == ours => Ok(()),
+        Some(found) => {
+            Err(format!("The uploaded gantryd reports {found}, this Gantry is {ours}: install Gantry again."))
+        }
+        None => Err(format!("The uploaded gantryd printed \"{line}\" instead of its version: install Gantry again.")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_installed_wants_this_version() {
+        assert_eq!(check_installed("gantry 0.11.0 (abc1234)", "0.11.0"), Ok(()));
+        let older = check_installed("gantry 0.10.0 (abc1234)", "0.11.0").unwrap_err();
+        assert!(older.contains("0.10.0") && older.contains("0.11.0"), "{older}");
+        for bad in ["", "bash: gantryd: command not found", "gantry"] {
+            assert!(check_installed(bad, "0.11.0").is_err(), "{bad:?}");
+        }
+    }
 
     #[test]
     fn a_probe_is_read_from_its_marked_lines_even_after_banner_lines() {
