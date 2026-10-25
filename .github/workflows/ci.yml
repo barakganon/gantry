@@ -3,7 +3,8 @@ on:
   # Pull requests only, no run on a plain push. Whether a pull request from a fork runs by itself or waits for the
   # maintainer's approval is a repository setting (Settings → Actions → General → Fork pull request workflows).
   pull_request:
-  # macOS and Windows run only from here (Actions → CI → Run workflow): their minutes cost 10× and 2×.
+  # macOS and Windows minutes cost 10× and 2×, so a pull request tests on Linux only, except one from a `release/*`
+  # branch, which also tests on macOS (with the smoke run). Windows runs only from here (Actions → CI → Run workflow).
   workflow_dispatch:
     inputs:
       linux:
@@ -42,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event_name != 'workflow_dispatch' && fromJSON('["ubuntu-24.04"]') || inputs.linux && fromJSON('["ubuntu-24.04", "macos-15", "windows-2025"]') || fromJSON('["macos-15", "windows-2025"]') }}
+        os: ${{ github.event_name != 'workflow_dispatch' && (startsWith(github.head_ref, 'release/') && fromJSON('["ubuntu-24.04", "macos-15"]') || fromJSON('["ubuntu-24.04"]')) || inputs.linux && fromJSON('["ubuntu-24.04", "macos-15", "windows-2025"]') || fromJSON('["macos-15", "windows-2025"]') }}
     runs-on: ${{ matrix.os }}
     # A cold build (no cache) takes about 30 min on Linux; a hang must not run for the default 6 hours.
     timeout-minutes: 60
@@ -69,7 +70,7 @@ jobs:
       - run: cargo test --workspace --no-fail-fast
       # Smoke run: does the app start and draw? A plain shell tab (no Claude), its own profile, 20 s, one screenshot.
       - name: Smoke run (macOS)
-        if: inputs.smoke && runner.os == 'macOS'
+        if: (inputs.smoke || startsWith(github.head_ref, 'release/')) && runner.os == 'macOS'
         env:
           GANTRY_PROFILE: smoke
           RUST_LOG: info
@@ -104,7 +105,7 @@ jobs:
           Get-Process gantry -ErrorAction SilentlyContinue | Stop-Process -Force
           if (-not $alive) { Write-Output "Gantry exited within 20 s"; Get-Content smoke\gantry.log, smoke\gantry.err; exit 1 }
       - name: Upload the smoke run
-        if: always() && inputs.smoke && runner.os != 'Linux'
+        if: always() && (inputs.smoke || startsWith(github.head_ref, 'release/')) && runner.os != 'Linux'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: smoke-${{ runner.os }}
