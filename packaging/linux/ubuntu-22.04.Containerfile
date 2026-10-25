@@ -1,4 +1,4 @@
-# Build image for build-tarball.sh: Ubuntu 22.04 (glibc 2.35) + build dependencies + Rust.
+# Build image for build-tarball.sh: Ubuntu 22.04 (glibc 2.35) + build dependencies + Rust (with the musl target for the static gantryd).
 FROM docker.io/library/ubuntu:22.04
 ARG RUST_TOOLCHAIN
 ENV DEBIAN_FRONTEND=noninteractive RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo PATH=/opt/cargo/bin:$PATH
@@ -10,4 +10,4 @@ RUN mv /bin/chown /bin/chown.real && printf '#!/bin/sh\n/bin/chown.real "$@" || 
       libasound2-dev libxkbcommon-dev libxkbcommon-x11-dev libxcb1-dev libwayland-dev \
       libfontconfig-dev libfreetype-dev \
     && mv /bin/chown.real /bin/chown && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal -c rustfmt -c clippy --default-toolchain "$RUST_TOOLCHAIN"
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal -c rustfmt -c clippy -t x86_64-unknown-linux-musl --default-toolchain "$RUST_TOOLCHAIN"

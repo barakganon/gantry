@@ -8,8 +8,18 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["gui"]
+# The window. Off, only `gantryd` builds (a static musl build needs none of the window libraries).
+gui = ["dep:ui-gpui"]
+
+[[bin]]
+name = "gantry"
+path = "src/main.rs"
+required-features = ["gui"]
+
 [dependencies]
-ui-gpui.workspace = true
+ui-gpui = { workspace = true, optional = true }
 daemon.workspace = true
 tracing-subscriber.workspace = true
 app-core.workspace = true

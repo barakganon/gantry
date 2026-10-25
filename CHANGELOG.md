@@ -11,6 +11,7 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Fixed
 - **Wrapped Claude launchers** - A Claude started through a wrapper (a launcher that starts the real `claude` as a child) is now recognized as the pane's session: it shows its status colors and no longer appears a second time as "Running outside Gantry" (on macOS it was shown as closed). Needs a daemon restart.
 - **"No viable candidates found in PATH" on macOS** - Claude panes start again when Gantry is opened from Finder or the Dock and your shell takes a few seconds to start: Gantry now waits up to 20 s for your shell's environment (was 5 s), and if it still can't read it, it adds `~/.local/bin`, Homebrew and the system folders to the PATH. Needs a daemon restart.
+- **gantryd on older Linux** - The gantryd that the SSH wizard uploads is now a static build, so it runs on older Linux hosts too (Amazon Linux 2, CentOS 7 and others with an older glibc).
 
 ## [0.10.0] - 2026-10-22
 
