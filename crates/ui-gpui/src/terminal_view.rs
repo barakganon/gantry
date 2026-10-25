@@ -543,12 +543,16 @@ impl TerminalView {
 
     /// Files copied in Finder or dropped on the pane arrive as their full paths, which Claude attaches (images) or reads.
     fn paste_paths(&mut self, paths: &ExternalPaths, cx: &mut Context<Self>) {
+        if input_fate(&self.state) == InputFate::Drop {
+            return;
+        }
         self.paste_text(&quote_paths(paths.paths().iter().filter_map(|path| path.to_str())), cx);
     }
 
     /// Whether the pane's program sees this machine's files: not on an SSH host or in a dev container.
+    /// Not on Windows yet: quoting is POSIX shell quoting.
     fn paths_are_local(&self) -> bool {
-        !self.remote && self.launch.container.is_none()
+        !cfg!(windows) && !self.remote && self.launch.container.is_none()
     }
 
     fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
