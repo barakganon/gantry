@@ -4,7 +4,8 @@ on:
   # maintainer's approval is a repository setting (Settings → Actions → General → Fork pull request workflows).
   pull_request:
   # macOS and Windows minutes cost 10× and 2×, so a pull request tests on Linux only, except one from a `release/*`
-  # branch, which also tests on macOS (with the smoke run). Windows runs only from here (Actions → CI → Run workflow).
+  # branch, which also tests on macOS (with the smoke run). Windows is paused until its port lands (#124–#126):
+  # add `windows-2025` back to the matrix below then.
   workflow_dispatch:
     inputs:
       linux:
@@ -43,7 +44,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event_name != 'workflow_dispatch' && (startsWith(github.head_ref, 'release/') && fromJSON('["ubuntu-24.04", "macos-15"]') || fromJSON('["ubuntu-24.04"]')) || inputs.linux && fromJSON('["ubuntu-24.04", "macos-15", "windows-2025"]') || fromJSON('["macos-15", "windows-2025"]') }}
+        os: ${{ github.event_name != 'workflow_dispatch' && (startsWith(github.head_ref, 'release/') && fromJSON('["ubuntu-24.04", "macos-15"]') || fromJSON('["ubuntu-24.04"]')) || inputs.linux && fromJSON('["ubuntu-24.04", "macos-15"]') || fromJSON('["macos-15"]') }}
     runs-on: ${{ matrix.os }}
     # A cold build (no cache) takes about 30 min on Linux; a hang must not run for the default 6 hours.
     timeout-minutes: 60
