@@ -4,9 +4,11 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use crate::assets::ARROW_DOWN_ICON;
+use crate::hover_card::{self, HoverCard};
 use crate::settings_store::SettingsStore;
 use crate::theme::{RADIUS, Theme, UI_FONT, theme};
 use app_core::bidi::{RowOrder, logical_hit, to_display};
+use app_core::dialogs::{BarState, BarTone, PaneBar, pane_bar};
 use app_core::host_state::HostCard;
 use app_core::image_paste;
 use app_core::input::{KeyInput, encode_key};
@@ -17,6 +19,7 @@ use app_core::scroll::{
     ACTIVE_HOLD_MS, CHIP_FADE_MS, CHIP_HOLD_MS, JUMP_MS, ScrollAction, activity, chip_opacity, jump_offset,
     offset_for_thumb_top, scroll_action, thumb,
 };
+use app_core::session_tree::Tone;
 use app_core::settings::Settings;
 use app_core::snapshot::{CellStyle, Rgb, ScreenSnapshot, row_spans};
 use app_core::term_state::TermState;
@@ -26,8 +29,8 @@ use app_core::workspace::PaneLaunch;
 use daemon::client::{ClientEvent, DaemonClient};
 use gpui::{
     App, BorderStyle, Bounds, ClickEvent, ContentMask, Context, EventEmitter, FocusHandle, Focusable, Font, FontStyle,
-    FontWeight, Hsla, Pixels, Point, StrikethroughStyle, Task, TextAlign, TextRun, UnderlineStyle, Window, canvas, div,
-    fill, font, outline, point, prelude::*, px, rgb, size, svg,
+    FontWeight, Hsla, Pixels, Point, SharedString, StrikethroughStyle, Task, TextAlign, TextRun, UnderlineStyle,
+    Window, canvas, div, fill, font, outline, point, prelude::*, px, rgb, size, svg,
 };
 use gpui::{
     ClipboardEntry, ClipboardItem, ElementInputHandler, EntityInputHandler, KeyBinding, KeyDownEvent, Modifiers,
@@ -129,6 +132,17 @@ pub enum PaneState {
     Disconnected,
 }
 
+impl From<&PaneState> for Option<BarState> {
+    fn from(state: &PaneState) -> Self {
+        match state {
+            PaneState::Starting | PaneState::Live => None,
+            PaneState::Exited(code) => Some(BarState::Exited(*code)),
+            PaneState::Failed(error) => Some(BarState::Failed(error.clone())),
+            PaneState::Disconnected => Some(BarState::Disconnected),
+        }
+    }
+}
+
 /// What happens to input typed into a pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InputFate {
@@ -199,7 +213,7 @@ impl Drag {
 pub enum PaneEvent {
     /// The user clicked into the pane.
     Focused,
-    /// The user asked to run the pane again (Continue / Restart).
+    /// The user asked to run the pane again (Resume conversation / Restart terminal).
     Rerun,
     /// The user asked to close the pane.
     Close,
@@ -403,7 +417,7 @@ impl TerminalView {
         self.launch.is_claude()
     }
 
-    /// Whether the process ended (or could not start): the pane shows Continue / Restart.
+    /// Whether the process ended (or could not start): the pane shows its bar (Resume / Restart and Close pane).
     pub fn has_ended(&self) -> bool {
         matches!(self.state, PaneState::Exited(_) | PaneState::Failed(_))
     }
@@ -432,18 +446,12 @@ impl TerminalView {
         }
     }
 
-    /// Banner text and whether Continue/Restart + Close apply.
-    fn banner(&self) -> Option<(String, bool)> {
+    /// The bar for an ended pane (none while it runs or while a host card shows).
+    fn banner(&self) -> Option<PaneBar> {
         if self.host_card.is_some() {
             return None;
         }
-        match &self.state {
-            PaneState::Starting | PaneState::Live => None,
-            PaneState::Exited(Some(code)) => Some((format!("Process exited (code {code})"), true)),
-            PaneState::Exited(None) => Some(("Session ended while Gantry was closed".into(), true)),
-            PaneState::Failed(error) => Some((format!("Could not start: {error}"), true)),
-            PaneState::Disconnected => Some(("Lost connection to the Gantry daemon — restart Gantry".into(), false)),
-        }
+        Option::<BarState>::from(&self.state).map(|state| pane_bar(&state, self.launch.is_claude()))
     }
 
     fn cell_metrics(font: &Font, font_size: Pixels, line_height: f32, window: &Window) -> CellMetrics {
@@ -1120,18 +1128,47 @@ impl Render for TerminalView {
                     ),
                 )
             })
-            .when_some(self.banner(), |this, (text, actions)| {
-                let rerun = if self.launch.is_claude() { "Continue" } else { "Restart" };
-                // A message in the middle of the pane, over the (still visible) terminal text.
+            .when_some(self.banner(), |this, bar| {
+                let dot = match bar.tone {
+                    BarTone::Ok => theme.tone(Tone::Done).dot,
+                    BarTone::Error => theme.tokens.danger,
+                    BarTone::Neutral => theme.tokens.muted,
+                };
+                let status = div()
+                    .id("bar-status")
+                    .flex()
+                    .items_center()
+                    .gap(theme.ui(6.))
+                    .text_xs()
+                    .text_color(rgb(theme.tokens.muted))
+                    .child(div().flex_none().size(theme.ui(7.)).rounded_full().bg(rgb(dot)))
+                    .child(
+                        div().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(bar.status.clone()),
+                    );
+                let status = match bar.detail.clone() {
+                    Some(detail) => status
+                        .tooltip(hover_card::tooltip(HoverCard {
+                            title: bar.title.clone(),
+                            status: Some(detail),
+                            dir: None,
+                            container: false,
+                            host: None,
+                            folder: None,
+                        }))
+                        .into_any_element(),
+                    None => status.into_any_element(),
+                };
+                // A slim bar along the bottom of the pane, over the (still visible) terminal text.
                 this.child(
-                    div().absolute().size_full().flex().items_center().justify_center().p(theme.ui(16.)).child(
+                    div().absolute().left_0().right_0().bottom_0().p(theme.ui(12.)).child(
                         div()
-                            .max_w(theme.ui(320.))
-                            .px(theme.ui(20.))
-                            .py(theme.ui(18.))
+                            .px(theme.ui(14.))
+                            .py(theme.ui(10.))
                             .flex()
-                            .flex_col()
-                            .gap(theme.ui(14.))
+                            .flex_wrap()
+                            .items_center()
+                            .justify_between()
+                            .gap(theme.ui(10.))
                             .rounded(px(RADIUS))
                             .bg(rgb(theme.tokens.raised))
                             .border_1()
@@ -1139,26 +1176,41 @@ impl Render for TerminalView {
                             .shadow_lg()
                             .text_color(rgb(theme.tokens.text))
                             .font_family(UI_FONT)
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child(text))
-                            .when(actions, |card| {
-                                card.child(
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(theme.ui(2.))
+                                    .flex_1()
+                                    .min_w(theme.ui(160.))
+                                    .overflow_hidden()
+                                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(bar.title.clone()))
+                                    .child(status),
+                            )
+                            .when(bar.rerun.is_some() || bar.close, |row| {
+                                row.child(
                                     div()
                                         .flex()
+                                        .flex_none()
                                         .gap(theme.ui(8.))
-                                        .child(banner_button(
-                                            "rerun",
-                                            rerun,
-                                            true,
-                                            &theme,
-                                            cx.listener(|_, _, _, cx| cx.emit(PaneEvent::Rerun)),
-                                        ))
-                                        .child(banner_button(
-                                            "close",
-                                            "Close",
-                                            false,
-                                            &theme,
-                                            cx.listener(|_, _, _, cx| cx.emit(PaneEvent::Close)),
-                                        )),
+                                        .children(bar.rerun.clone().map(|label| {
+                                            banner_button(
+                                                "rerun",
+                                                label,
+                                                true,
+                                                &theme,
+                                                cx.listener(|_, _, _, cx| cx.emit(PaneEvent::Rerun)),
+                                            )
+                                        }))
+                                        .when(bar.close, |buttons| {
+                                            buttons.child(banner_button(
+                                                "close",
+                                                "Close pane",
+                                                false,
+                                                &theme,
+                                                cx.listener(|_, _, _, cx| cx.emit(PaneEvent::Close)),
+                                            ))
+                                        }),
                                 )
                             }),
                     ),
@@ -1175,7 +1227,7 @@ fn resize_on_attach(grid: (u16, u16), cell: (u16, u16)) -> Option<(u16, u16, u16
 
 fn banner_button(
     id: &'static str,
-    label: &'static str,
+    label: impl Into<SharedString>,
     primary: bool,
     theme: &Theme,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -1202,7 +1254,7 @@ fn banner_button(
                     .hover(|style| style.bg(rgb(theme.tokens.surface)))
             }
         })
-        .child(label)
+        .child(label.into())
         .on_click(on_click)
 }
 
