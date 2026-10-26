@@ -839,8 +839,11 @@ impl SidebarView {
     }
 
     /// Save the order shown now (the user just changed it) and tell the workspace.
-    fn record_order(&mut self, projects: &[PathBuf], leaves: &[NodeId], cx: &mut Context<Self>) {
-        self.saved_order.record(projects, leaves);
+    fn record_order(&mut self, shown_projects: &[PathBuf], leaves: &[NodeId], cx: &mut Context<Self>) {
+        let projects = self.order.to_save(shown_projects);
+        self.saved_order.record(&projects, leaves);
+        let panes = &self.panes;
+        self.saved_order.retain_leaves(|leaf| panes.iter().any(|pane| pane.leaf == leaf));
         self.order.seed(&self.saved_order.projects);
         self.rebuild(cx);
         cx.emit(SidebarEvent::OrderChanged(self.saved_order.clone()));

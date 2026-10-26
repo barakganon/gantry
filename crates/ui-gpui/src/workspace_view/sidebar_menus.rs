@@ -164,7 +164,10 @@ impl WorkspaceView {
             } else {
                 MenuContext::for_folder(cx.global::<SettingsStore>().settings(), &leaf.launch.cwd)
             };
-            context.pane_color = Some((tab.focused, leaf.color));
+            // A split tab's heading would color whichever pane has focus; its panes' own rows have the menu.
+            if tab.root.leaves().len() == 1 {
+                context.pane_color = Some((tab.focused, leaf.color));
+            }
             let idle = leaf.session.as_deref().and_then(|id| sessions.get(&leaf.host, id)).is_some_and(|info| {
                 matches!(info.state, SessionState::Managed { .. })
                     && status_tone(info.status.as_ref(), Unseen::No) == Tone::Idle

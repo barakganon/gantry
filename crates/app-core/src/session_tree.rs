@@ -111,6 +111,13 @@ impl ProjectOrder {
         self.started = true;
     }
 
+    /// The order to save: every project in its place, but only those in `shown` and those of SSH hosts (which may only
+    /// be away); a local project that is gone for good is forgotten.
+    pub fn to_save(&self, shown: &[PathBuf]) -> Vec<PathBuf> {
+        let ssh = |path: &PathBuf| path.to_string_lossy().starts_with("ssh://");
+        self.order.iter().filter(|path| shown.contains(path) || ssh(path)).cloned().collect()
+    }
+
     /// The projects in order, top to bottom (including kept ones that are not listed).
     pub fn projects(&self) -> &[PathBuf] {
         &self.order
@@ -1636,6 +1643,14 @@ mod tests {
         let (shown_projects, items) = shown_order(&projects, Some((0, &moved)));
         assert_eq!(shown_projects, paths(&["/r/app", "/r/web"]));
         assert_eq!(items, vec![1, 4, 5, 6]);
+    }
+
+    #[test]
+    fn the_order_to_save_keeps_places_of_ssh_projects_that_are_away_and_drops_other_unlisted_ones() {
+        let mut order = ProjectOrder::default();
+        order.seed(&paths(&["ssh://box/app", "/a", "/gone", "/b"]));
+        order.update(&paths(&["/b", "/a"]), false);
+        assert_eq!(order.to_save(&paths(&["/a", "/b"])), paths(&["ssh://box/app", "/a", "/b"]));
     }
 
     #[test]

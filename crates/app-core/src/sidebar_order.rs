@@ -30,11 +30,16 @@ impl SidebarOrder {
         self.items.iter().position(|item| leaves.contains(item))
     }
 
-    /// Remember the order shown now: the shown projects and tabs first, in order, then the saved ones that are not
-    /// shown (an SSH host that is away, a collapsed project), in their saved order.
-    pub fn record(&mut self, shown_projects: &[PathBuf], shown_items: &[NodeId]) {
-        let rest: Vec<PathBuf> = self.projects.iter().filter(|path| !shown_projects.contains(path)).cloned().collect();
-        self.projects = shown_projects.iter().cloned().chain(rest).collect();
+    /// Forget leaves that no longer exist.
+    pub fn retain_leaves(&mut self, live: impl Fn(NodeId) -> bool) {
+        self.items.retain(|leaf| live(*leaf));
+    }
+
+    /// Remember the order shown now: `projects` replaces the saved projects (the caller passes every project to keep,
+    /// in place), the shown tabs come first, in order, then the saved ones that are not shown (an SSH host that is
+    /// away, a collapsed project), in their saved order.
+    pub fn record(&mut self, projects: &[PathBuf], shown_items: &[NodeId]) {
+        self.projects = projects.to_vec();
         let rest: Vec<NodeId> = self.items.iter().filter(|item| !shown_items.contains(item)).copied().collect();
         self.items = shown_items.iter().copied().chain(rest).collect();
     }
@@ -79,12 +84,19 @@ mod tests {
     }
 
     #[test]
-    fn record_keeps_unshown_saved_entries_after_shown_ones() {
+    fn record_replaces_projects_and_keeps_unshown_items_after_shown_ones() {
         let mut order =
             SidebarOrder { projects: vec!["/a".into(), "/remote".into(), "/b".into()], items: vec![9, 1, 2] };
         order.record(&["/b".into(), "/a".into()], &[2, 3]);
-        assert_eq!(order.projects, vec![PathBuf::from("/b"), "/a".into(), "/remote".into()]);
+        assert_eq!(order.projects, vec![PathBuf::from("/b"), "/a".into()], "the caller passes every project to keep");
         assert_eq!(order.items, vec![2, 3, 9, 1]);
+    }
+
+    #[test]
+    fn retain_leaves_forgets_leaves_that_are_gone() {
+        let mut order = SidebarOrder { projects: vec![], items: vec![9, 1, 2, 7] };
+        order.retain_leaves(|leaf| leaf == 1 || leaf == 2);
+        assert_eq!(order.items, vec![1, 2]);
     }
 
     #[test]
