@@ -163,6 +163,27 @@ impl WorkspaceView {
     }
 
     /// Open tab `index`'s right-click menu at `position` (it acts on that tab, not the visible one).
+    /// Give a local Claude pane's session the name too, as `/rename` would, so Claude and `claude --resume` show it.
+    fn name_claude_session(&self, leaf: NodeId, name: &str, cx: &Context<Self>) {
+        let Some(entry) = self.workspace.leaves.get(&leaf) else { return };
+        let Some(session) = entry.session.as_deref() else { return };
+        if name.is_empty() || !entry.host.is_local() || entry.launch.container.is_some() {
+            return;
+        }
+        let claude_dir = self
+            .sidebar
+            .read(cx)
+            .sessions()
+            .get(&entry.host, session)
+            .and_then(|info| info.claude_dir.clone())
+            .or_else(|| claude_index::config::config_dir(&std::env::vars().collect::<Vec<_>>()));
+        if let Some(dir) = claude_dir
+            && let Err(err) = claude_index::transcript::set_name(&dir, session, name)
+        {
+            tracing::warn!("naming Claude session {session}: {err}");
+        }
+    }
+
     /// The right-click menu of a split pane's header.
     pub(super) fn open_header_menu(
         &mut self,
@@ -256,7 +277,10 @@ impl WorkspaceView {
             SidebarEvent::Menu(action) => self.run_menu_action(action, window, cx),
             SidebarEvent::Rename { target, name } => {
                 let renamed = match target {
-                    RenameTarget::Pane(leaf) => self.workspace.rename_leaf(leaf, &name),
+                    RenameTarget::Pane(leaf) => {
+                        self.name_claude_session(leaf, &name, cx);
+                        self.workspace.rename_leaf(leaf, &name)
+                    }
                     RenameTarget::Tab(index) => self.workspace.rename_tab(index, &name),
                 };
                 if renamed {
