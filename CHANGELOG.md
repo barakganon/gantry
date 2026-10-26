@@ -5,30 +5,27 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-### Added
-- **Collapsible SSH hosts** - Click the SSH hosts heading to fold the card into one line; it shows the number of connected hosts and a status dot at the right, so you still see when a host is connected, and folds by itself when the sessions list starts to scroll (open it by hand and it stays open).
+## [0.12.0] - 2026-10-26
 
-- **Tab colors** - Right-click a pane > Tab color to give it a color of its own: pick one of the eight palette colors or a custom one, or reset it to the project color. The color is a second bar next to the project line on the pane's sidebar row, its title-bar chip and its pane header (a split tab's heading keeps only the project line), and stays with the pane when you drag it in or out of a split tab.
-- **Custom colors** - Pane colors and project colors (right-click a project > Color > Custom color…) have a color picker with a saturation square, a hue bar and a hex field. `projectColors` in settings.json also accepts `#rrggbb`.
-- **Close button on tabs** - Hover a tab, pane or split tab in the sidebar to get a red × that closes it (a split tab's × closes the whole tab). It takes the place of the config dir badge while the pointer is over the row.
-- **Reorder tabs** - Drag a tab (or a split tab's heading) up or down inside its project; a line shows where it lands. Dropping it on another project does nothing, and tabs cannot be moved while the sidebar filter has text.
+### Added
+- **Collapsible SSH hosts** - Click the SSH hosts heading to fold the card into one line with the number of connected hosts and a status dot. It also folds by itself when the sessions list starts to scroll. This replaces the automatic collapse above four hosts.
+- **Tab colors** - Right-click a pane > Tab color to give it its own color, shown next to the project line on its sidebar row, title-bar chip and pane header. It stays with the pane when you move it between tabs.
+- **Custom colors** - Tab and project colors can be any color from a color picker. `projectColors` in settings.json also accepts `#rrggbb`.
+- **Close button on tabs** - Hover a tab, pane or split tab in the sidebar for a red × that closes it.
+- **Reorder tabs** - Drag a tab or a split tab's heading up or down inside its project. The order of projects and tabs is now kept when Gantry restarts.
 
 ### Changed
-- **Clearer dialogs** - Every pop-up is now drawn by Gantry, says what is running and what each button does.
-  - Quit tells you how many Claude sessions and terminals are running (and how many are working) and offers Keep sessions running or Stop all and quit.
-  - Disconnecting from an SSH host says whether its sessions keep running on the host.
-  - The other pop-ups (closing a pane or tab, taking over a session, dev container choice, background service out of date) use the same dialog.
-  - The card shown when a process ended is now a slim bar at the bottom of the pane, with the exit status and the buttons.
-- **Resume conversation** - "Continue" is now "Resume conversation" in the pane bar, the right-click menus, the welcome screen and Settings.
-- **Project headings** - The project name now sits at the left edge, left of the session bars, and the project dot and the fold chevron are together at the right, joined to the name by a hairline (left out when the name leaves no room for it); the tabs under it start 10 px further right.
+- **Clearer dialogs** - Every pop-up is now a Gantry dialog that says what is running and what each button does. Quit offers Keep sessions running or Stop all and quit. Esc cancels, Tab and the arrow keys move between buttons, and the safe choice has the focus.
+- **Process-ended bar** - When a pane's process ends, a slim bar at the bottom of the pane shows the exit status and the buttons, instead of a card in the middle.
+- **Resume** - "Continue" is now "Resume" in the menus, the welcome screen and Settings, and "Resume conversation" in the pane bar.
+- **Project headings** - The project name sits at the left edge, with the project dot and fold chevron at the right.
 - **Split tab names** - A split tab without a name of its own is titled with its first pane's name instead of the project's.
-- **Saved sidebar order** - The order of projects and of the tabs inside them (what you set by dragging) is kept in the layout and restored when Gantry starts.
-- **Leaner sidebar menus** - The tab menu (title-bar chip) no longer offers "New Claude here with". Session and pane rows no longer offer "New Claude here", "New Claude here with" or "New terminal here" (use the project heading, or split the tab), and the project menu no longer has "Pin as favorite" / "Unpin" (favorites are still managed in Settings and the folder launcher).
-- **Notifications on macOS** - Settings > Alerts and the README now say that macOS needs Gantry allowed in System Settings > Notifications.
-- **SSH hosts card** - The automatic collapse above four hosts and the "n of m connected" heading are gone; use the toggle.
+- **Leaner sidebar menus** - Session and pane rows no longer offer New Claude here or New terminal here (use the project heading, or split the tab), and Pin as favorite moved out of the project menu (favorites stay in Settings and the launcher).
+- **Selected row** - The selected sidebar row's fill now sits a little inside its selection ring.
+- **Notifications on macOS** - Settings > Alerts notes that macOS needs Gantry allowed in System Settings > Notifications.
 
 ### Fixed
-- **Running only no longer piles up tabs** - Finished tabs were kept in the saved layout while "Tabs at start" was Running only, so switching to Restore brought back every tab ever left finished, and started them all again. Running only now closes finished tabs for good (their conversations stay in recent sessions). A layout that already holds old ones loses them the first time Gantry starts and saves in Running only.
+- **Running only no longer piles up tabs** - With "Tabs at start" set to Running only, finished tabs are now closed for good instead of coming back all at once after switching to Restore. Their conversations stay in recent sessions.
 - **Tab switching and SSH hosts** - Ctrl+Tab and Back/Forward no longer stop on tabs of an SSH host that is not connected; they come back once the host connects.
 - **Bold in release notes** - The release notes card under the ↑ Update pill shows `**bold**` text in bold instead of the asterisks.
 
