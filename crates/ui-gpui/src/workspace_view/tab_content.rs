@@ -297,7 +297,7 @@ impl WorkspaceView {
                         div()
                             .flex()
                             .gap(theme.ui(12.))
-                            .child(action("welcome-continue", "Continue a conversation", continue_sub, true))
+                            .child(action("welcome-continue", "Resume a conversation", continue_sub, true))
                             .child(action(
                                 "welcome-terminal",
                                 "Open a terminal",

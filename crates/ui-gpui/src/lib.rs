@@ -5,6 +5,7 @@ mod askpass_view;
 mod assets;
 mod color_picker_view;
 mod context_menu;
+mod dialog_view;
 mod field;
 mod git_chip;
 mod git_diff_view;
@@ -33,26 +34,36 @@ use std::path::PathBuf;
 use app_core::settings::WindowSettings;
 use app_core::split_tree::NodeId;
 use app_core::workspace::{ClaudeDirs, HostLive, Launch, restore};
-use app_core::{layout_store, window_state};
+use app_core::{dialogs, layout_store, window_state};
 use daemon::client::{Connection, DaemonClient, StartError, restart_daemon};
 use daemon::launch::spawn_detached_daemon;
 use daemon::paths::{Paths, current_profile};
 use gpui::{
-    App, AppContext, Bounds, Context, IntoElement, PromptLevel, Render, Styled, TitlebarOptions, Window, WindowBounds,
-    WindowHandle, WindowOptions, div, px, rgb, size,
+    App, AppContext, Bounds, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled, Subscription,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, px, rgb, size,
 };
 
 use protocol::host::HostId;
 
+use crate::dialog_view::{DialogEvent, DialogView, dialog_overlay};
 use crate::settings_store::SettingsStore;
 use crate::workspace_view::{Resume, WorkspaceView};
 
 /// Placeholder shown while asking whether to restart a mismatched daemon.
-struct Notice;
+struct Notice {
+    dialog: Option<Entity<DialogView>>,
+    _subscription: Option<Subscription>,
+}
 
 impl Render for Notice {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().bg(rgb(theme::theme(cx).tokens.ground))
+        let theme = theme::theme(cx).clone();
+        let animate = cx.global::<SettingsStore>().settings().animate_ui;
+        div()
+            .size_full()
+            .bg(rgb(theme.tokens.ground))
+            .relative()
+            .children(self.dialog.clone().map(|view| dialog_overlay(view, &theme, animate)))
     }
 }
 
@@ -111,30 +122,39 @@ pub fn run(launch: Launch, resume_sessions: bool) {
                 install_quit_prompt(window, cx);
             }
             Err(StartError::VersionMismatch { .. }) => {
-                let window = cx.open_window(options, |_, cx| cx.new(|_| Notice)).expect("open window");
-                let _ = window.update(cx, move |_, window, cx| {
-                    let answer = window.prompt(
-                        PromptLevel::Warning,
-                        "Gantry daemon version mismatch",
-                        Some("Restarting stops all sessions."),
-                        &["Restart daemon", "Quit"],
-                        cx,
-                    );
-                    cx.spawn_in(window, async move |_, cx| {
-                        let restarted = answer.await == Ok(0) && restart_daemon(&paths).is_ok();
-                        let connection =
-                            restarted.then(|| DaemonClient::connect(&paths, spawn_detached_daemon).ok()).flatten();
-                        let _ = cx.update(|window, cx| match connection {
-                            Some(connection) => {
-                                let view = window.replace_root(cx, |window, cx| {
-                                    workspace(connection, &launch, &paths, resume_sessions, window, cx)
-                                });
-                                install_should_close(window, cx, view);
-                            }
-                            None => cx.quit(),
-                        });
-                    })
-                    .detach();
+                let window = cx
+                    .open_window(options, |_, cx| cx.new(|_| Notice { dialog: None, _subscription: None }))
+                    .expect("open window");
+                let mut restart = Some((paths, launch));
+                let _ = window.update(cx, move |notice, window, cx| {
+                    let view = cx.new(|cx| DialogView::new(dialogs::daemon_mismatch(), cx));
+                    let subscription = cx.subscribe_in(&view, window, move |_, _, event: &DialogEvent, window, cx| {
+                        let DialogEvent::Chosen(index) = event;
+                        let Some((paths, launch)) = restart.take() else { return };
+                        if *index != 0 {
+                            cx.quit();
+                            return;
+                        }
+                        cx.spawn_in(window, async move |_, cx| {
+                            let restarted = restart_daemon(&paths).is_ok();
+                            let connection =
+                                restarted.then(|| DaemonClient::connect(&paths, spawn_detached_daemon).ok()).flatten();
+                            let _ = cx.update(|window, cx| match connection {
+                                Some(connection) => {
+                                    let view = window.replace_root(cx, |window, cx| {
+                                        workspace(connection, &launch, &paths, resume_sessions, window, cx)
+                                    });
+                                    install_should_close(window, cx, view);
+                                }
+                                None => cx.quit(),
+                            });
+                        })
+                        .detach();
+                    });
+                    view.focus_handle(cx).focus(window, cx);
+                    notice.dialog = Some(view);
+                    notice._subscription = Some(subscription);
+                    cx.notify();
                 });
             }
             Err(err) => {
@@ -230,7 +250,7 @@ fn install_quit_prompt(window: WindowHandle<WorkspaceView>, cx: &mut App) {
     });
 }
 
-/// Closing the window asks: Detach (sessions keep running) / Stop all sessions / Cancel.
+/// Closing the window asks: Keep sessions running / Stop all and quit / Cancel.
 fn install_should_close(window: &mut Window, cx: &mut App, view: gpui::Entity<WorkspaceView>) {
     window.on_window_should_close(cx, move |window, cx| view.update(cx, |view, cx| view.request_quit(window, cx)));
 }
@@ -240,6 +260,36 @@ mod tests {
     use super::*;
 
     const DESKTOP: &str = include_str!("../../../packaging/linux/io.github.idogrf.Gantry.desktop");
+
+    fn rust_files(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_files(&path, found);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                found.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn no_native_prompts_remain() {
+        let needles = [
+            concat!(".pro", "mpt("),
+            concat!("Prompt", "Level"),
+            concat!("\"Det", "ach\""),
+            concat!("\"Process ex", "ited"),
+        ];
+        let mut files = Vec::new();
+        rust_files(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        assert!(files.len() > 10 && files.iter().any(|file| file.ends_with("lib.rs")), "the walk found no sources");
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            for needle in needles {
+                assert!(!text.contains(needle), "{} still contains {needle}", file.display());
+            }
+        }
+    }
 
     #[test]
     fn resume_flag_resumes_only_what_was_live() {

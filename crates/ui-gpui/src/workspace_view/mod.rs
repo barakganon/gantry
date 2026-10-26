@@ -1,9 +1,8 @@
 //! The window's root view: tabs of split panes, routing daemon events to them, and saving the layout.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use app_core::attention::{AlertKind, AttentionTracker};
@@ -30,6 +29,7 @@ use app_core::settings::SshHost;
 use crate::askpass_view::AskpassView;
 use crate::color_picker_view::ColorPickerView;
 use crate::context_menu::OpenMenu;
+use crate::dialog_view::DialogView;
 use crate::git_diff_view::DiffState;
 use crate::git_panel::PanelTab;
 use crate::git_scrollbar::{self};
@@ -104,8 +104,47 @@ struct Slot {
     _subscription: Subscription,
 }
 
+/// What the answer to an open dialog does; the choice index comes with the answer.
+pub(super) enum DialogAction {
+    /// Quit Gantry: 0 keep sessions, 1 stop this machine's sessions, 2 cancel.
+    Quit,
+    /// Disconnect from an SSH host: 0 detach, 1 end its sessions and disconnect.
+    Disconnect(HostId),
+    /// Close these leaves: 0 closes.
+    ClosePanes(Vec<NodeId>),
+    /// Take over `session` on `host`: 0 asks the daemon to stop it and remembers where to resume.
+    TakeOver { host: HostId, session: String, target: TakeOverTarget },
+    /// The session ignored the stop request: 0 force quits it, any other choice gives up the take over.
+    ForceQuit { waiting: (HostId, String) },
+    /// A new session in a folder a dev container mounts: 0 opens in the container, 1 on this machine.
+    DevContainer(Box<DevContainerOpen>),
+    /// A notice: nothing to do with the answer.
+    Ack,
+}
+
+/// What a new session needs once its dev container question is answered.
+pub(super) struct DevContainerOpen {
+    claude: bool,
+    pick: Option<String>,
+    cwd: PathBuf,
+    axis: Option<Axis>,
+    cwd_from: Option<PaneKey>,
+    host: HostId,
+    /// The folder the container mounts, on the host.
+    host_folder: PathBuf,
+}
+
+/// The dialog on screen with what its answer does.
+pub(super) struct OpenDialog {
+    view: Entity<DialogView>,
+    action: DialogAction,
+    /// What had the focus when it opened (the launcher, say), given back when it closes.
+    restore: Option<FocusHandle>,
+    _subscription: Subscription,
+}
+
 /// Where a taken-over session is resumed.
-enum TakeOverTarget {
+pub(super) enum TakeOverTarget {
     /// A new tab, or a split of the focused pane.
     NewPane {
         /// The session's directory.
@@ -296,7 +335,8 @@ pub struct WorkspaceView {
     /// The paths last sent to the daemon with `SetClaudeDirs`.
     sent_dirs: Option<Vec<PathBuf>>,
     focus_handle: FocusHandle,
-    prompting: Rc<Cell<bool>>,
+    /// The confirmation dialog on screen, if any.
+    dialog: Option<OpenDialog>,
     /// Divider being dragged.
     dragging: Option<Divider>,
     /// Window bounds of the visible tab's pane area (for divider drags).
@@ -556,7 +596,7 @@ impl WorkspaceView {
             daemon_dir,
             sent_dirs: None,
             focus_handle: cx.focus_handle(),
-            prompting: Rc::new(Cell::new(false)),
+            dialog: None,
             dragging: None,
             content_bounds: Bounds::default(),
             pane_anim: None,

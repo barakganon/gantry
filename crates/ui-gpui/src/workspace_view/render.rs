@@ -13,6 +13,7 @@ use app_core::session_tree::Tone;
 
 use crate::color_picker_view::ColorPickerEvent;
 use crate::context_menu::{self};
+use crate::dialog_view::dialog_overlay;
 use crate::settings_store::SettingsStore;
 use crate::theme::{FadeKind, RADIUS, RADIUS_SMALL, Theme, UI_FONT, fade_in, theme};
 use crate::window_frame;
@@ -97,7 +98,8 @@ impl Render for WorkspaceView {
                 },
             ));
         let root = div()
-            .key_context("Workspace")
+            // Without the context no shortcut reaches the panes while a dialog is open.
+            .when(self.dialog.is_none(), |root| root.key_context("Workspace"))
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::new_claude_tab))
             .on_action(cx.listener(Self::new_shell_tab))
@@ -116,7 +118,9 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(Self::history_forward))
             // The mouse side buttons, anywhere in the window (over a pane too: the panes never see them).
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                if let MouseButton::Navigate(direction) = event.button {
+                if let MouseButton::Navigate(direction) = event.button
+                    && this.dialog.is_none()
+                {
                     cx.stop_propagation();
                     this.history(if direction == gpui::NavigationDirection::Back { -1 } else { 1 }, window, cx);
                 }
@@ -412,6 +416,10 @@ impl Render for WorkspaceView {
                     move |action, window, cx| pick(action, window, cx),
                     move |window, cx| dismiss(&(), window, cx),
                 ))
+            })
+            // Last, so nothing above the workspace draws over its scrim.
+            .when_some(self.dialog.as_ref().map(|open| open.view.clone()), |root, view| {
+                root.child(dialog_overlay(view, &theme, fade))
             });
         window_frame::frame(window, theme.tokens.line, root)
     }

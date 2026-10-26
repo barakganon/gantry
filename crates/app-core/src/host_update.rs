@@ -28,9 +28,11 @@ pub fn click_plan(running: usize) -> Click {
 /// The confirmation card's amber line.
 pub fn ask_note(host: &str, running: usize) -> String {
     if running == 1 {
-        format!("Restarting ends the 1 session running on {host}. Its pane shows Continue afterwards.")
+        format!("Restarting ends the 1 session running on {host}. Its pane offers Resume conversation afterwards.")
     } else {
-        format!("Restarting ends the {running} sessions running on {host}. Their panes show Continue afterwards.")
+        format!(
+            "Restarting ends the {running} sessions running on {host}. Their panes offer Resume conversation afterwards."
+        )
     }
 }
 
@@ -73,8 +75,8 @@ mod tests {
     #[test]
     fn note_counts_sessions() {
         assert!(ask_note("box", 1).contains("the 1 session running on box"));
-        assert!(ask_note("box", 1).contains("Its pane shows"));
+        assert!(ask_note("box", 1).contains("Its pane offers Resume conversation afterwards."));
         assert!(ask_note("box", 2).contains("the 2 sessions running on box"));
-        assert!(ask_note("box", 2).contains("Their panes show"));
+        assert!(ask_note("box", 2).contains("Their panes offer Resume conversation afterwards."));
     }
 }

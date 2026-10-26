@@ -1,9 +1,10 @@
-use super::{TakeOverTarget, WorkspaceView};
+use super::{DialogAction, TakeOverTarget, WorkspaceView};
 use std::path::PathBuf;
 
+use app_core::dialogs;
 use app_core::split_tree::{Axis, NodeId};
 use app_core::workspace::{PaneLaunch, Rerun};
-use gpui::{App, Context, PromptLevel, Window};
+use gpui::{App, Context, Window};
 use protocol::host::HostId;
 use protocol::message::{SessionState, TakeOverOutcome};
 
@@ -65,17 +66,7 @@ impl WorkspaceView {
                         self.confirm_take_over(host, session, TakeOverTarget::Leaf(leaf), window, cx)
                     }
                     _ => {
-                        let answer = window.prompt(
-                            PromptLevel::Info,
-                            "Can't continue this session",
-                            Some("This session is running outside Gantry and can't be taken over from here."),
-                            &["OK"],
-                            cx,
-                        );
-                        cx.spawn(async move |_, _| {
-                            let _ = answer.await;
-                        })
-                        .detach();
+                        self.open_dialog(dialogs::cannot_resume(), DialogAction::Ack, window, cx);
                     }
                 }
             }
@@ -96,36 +87,11 @@ impl WorkspaceView {
             return;
         }
         if self.client(&host).is_none() {
-            let message = format!("{} is not connected.", host.name());
-            let answer = window.prompt(PromptLevel::Info, "Cannot take over the session", Some(&message), &["OK"], cx);
-            cx.spawn(async move |_, _| {
-                let _ = answer.await;
-            })
-            .detach();
+            self.open_dialog(dialogs::cannot_take_over(host.name()), DialogAction::Ack, window, cx);
             return;
         }
-        let title = match host.remote_name() {
-            Some(name) => format!("Take over this session on {name}?"),
-            None => "Take over this session?".to_string(),
-        };
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            &title,
-            Some("Unsent input outside Gantry is lost."),
-            &["Take over", "Cancel"],
-            cx,
-        );
-        cx.spawn_in(window, async move |this, cx| {
-            if answer.await == Ok(0) {
-                let _ = this.update_in(cx, |this, _, _| {
-                    if let Some(client) = this.client(&host) {
-                        client.take_over(&session, false);
-                        this.take_overs.insert((host, session), target);
-                    }
-                });
-            }
-        })
-        .detach();
+        let spec = dialogs::take_over(host.remote_name());
+        self.open_dialog(spec, DialogAction::TakeOver { host, session, target }, window, cx);
     }
 
     pub(super) fn on_take_over(
@@ -138,58 +104,50 @@ impl WorkspaceView {
     ) {
         let waiting = (host.clone(), session.clone());
         match outcome {
-            TakeOverOutcome::Exited => match self.take_overs.remove(&waiting) {
-                Some(TakeOverTarget::NewPane { cwd, split, container }) => {
-                    let axis = (split && self.workspace.can_split()).then_some(Axis::Horizontal);
-                    let launch = self.resume_launch(&host, &session, cwd, container, cx);
-                    self.open_launch(launch, axis, None, host, window, cx);
+            TakeOverOutcome::Exited => {
+                if matches!(&self.dialog, Some(open) if matches!(&open.action, DialogAction::ForceQuit { waiting: asked } if *asked == waiting))
+                {
+                    // The session is gone: Force quit has nothing left to act on.
+                    self.dialog = None;
+                    self.focus_current(window, cx);
                 }
-                Some(TakeOverTarget::Leaf(leaf)) => {
-                    let session_dir =
-                        self.sidebar.read(cx).sessions().get(&host, &session).and_then(|info| info.claude_dir.clone());
-                    let launch = self.workspace.leaves.get(&leaf).map(|entry| {
-                        entry.rerun_resolved(true, session_dir.as_deref(), &self.dirs, self.daemon_dir.as_deref())
-                    });
-                    if let Some(launch) = launch {
-                        self.start_leaf(leaf, launch, window, cx);
-                        self.focus_leaf(leaf, window, cx);
+                match self.take_overs.remove(&waiting) {
+                    Some(TakeOverTarget::NewPane { cwd, split, container }) => {
+                        let axis = (split && self.workspace.can_split()).then_some(Axis::Horizontal);
+                        let launch = self.resume_launch(&host, &session, cwd, container, cx);
+                        self.open_launch(launch, axis, None, host, window, cx);
                     }
+                    Some(TakeOverTarget::Leaf(leaf)) => {
+                        let session_dir = self
+                            .sidebar
+                            .read(cx)
+                            .sessions()
+                            .get(&host, &session)
+                            .and_then(|info| info.claude_dir.clone());
+                        let launch = self.workspace.leaves.get(&leaf).map(|entry| {
+                            entry.rerun_resolved(true, session_dir.as_deref(), &self.dirs, self.daemon_dir.as_deref())
+                        });
+                        if let Some(launch) = launch {
+                            self.start_leaf(leaf, launch, window, cx);
+                            self.focus_leaf(leaf, window, cx);
+                        }
+                    }
+                    None => {}
                 }
-                None => {}
-            },
+            }
             TakeOverOutcome::StillRunning => {
                 if !self.take_overs.contains_key(&waiting) {
                     return;
                 }
-                let answer = window.prompt(
-                    PromptLevel::Warning,
-                    "Claude is still running",
-                    Some("It ignored the stop request for 5 s."),
-                    &["Force quit", "Cancel"],
-                    cx,
-                );
-                cx.spawn_in(window, async move |this, cx| {
-                    let force = answer.await == Ok(0);
-                    let _ = this.update_in(cx, |this, _, _| {
-                        if force {
-                            if let Some(client) = this.client(&waiting.0) {
-                                client.take_over(&waiting.1, true);
-                            }
-                        } else {
-                            this.take_overs.remove(&waiting);
-                        }
-                    });
-                })
-                .detach();
+                let action = DialogAction::ForceQuit { waiting: waiting.clone() };
+                if !self.open_dialog(dialogs::force_quit(), action, window, cx) {
+                    self.take_overs.remove(&waiting);
+                }
             }
             TakeOverOutcome::Failed { error } => {
                 self.take_overs.remove(&waiting);
-                let answer =
-                    window.prompt(PromptLevel::Critical, "Could not take over the session", Some(&error), &["OK"], cx);
-                cx.spawn(async move |_, _| {
-                    let _ = answer.await;
-                })
-                .detach();
+                let spec = dialogs::notice("Could not take over the session", &error);
+                self.open_dialog(spec, DialogAction::Ack, window, cx);
             }
         }
     }
