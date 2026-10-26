@@ -32,23 +32,19 @@ impl HostsFold {
         self.collapsed
     }
 
-    /// Takes whether the sessions list scrolled in the last paint; returns `true` when the card must be redrawn.
-    pub fn observe(&mut self, overflowing: bool) -> bool {
+    /// Takes whether the sessions list scrolled in the last paint; call it before drawing the card, which then
+    /// reflects `collapsed`. Only ever collapses.
+    pub fn observe(&mut self, overflowing: bool) {
         if self.collapsed {
-            return false;
+            return;
         }
         if self.settling {
             self.settling = false;
-            return true;
-        }
-        if overflowing && self.armed {
+        } else if overflowing && self.armed {
             self.collapsed = true;
-            return true;
-        }
-        if !overflowing && !self.armed {
+        } else if !overflowing && !self.armed {
             self.armed = true;
         }
-        false
     }
 }
 
@@ -65,16 +61,17 @@ mod tests {
     #[test]
     fn a_scrolling_list_collapses_an_expanded_card_once() {
         let mut fold = HostsFold::new(false);
-        assert!(fold.observe(true));
+        fold.observe(true);
         assert!(fold.collapsed());
-        assert!(!fold.observe(true));
+        fold.observe(true);
+        assert!(fold.collapsed());
     }
 
     #[test]
     fn it_never_expands_by_itself() {
         let mut fold = HostsFold::new(true);
         for _ in 0..5 {
-            assert!(!fold.observe(false));
+            fold.observe(false);
         }
         assert!(fold.collapsed());
     }
@@ -83,11 +80,11 @@ mod tests {
     fn a_manual_expand_survives_a_stale_measurement() {
         let mut fold = HostsFold::new(true);
         assert!(!fold.toggle());
-        assert!(fold.observe(false));
+        fold.observe(false);
         assert!(!fold.collapsed());
-        assert!(!fold.observe(true));
+        fold.observe(true);
         assert!(!fold.collapsed());
-        assert!(!fold.observe(true));
+        fold.observe(true);
         assert!(!fold.collapsed());
     }
 
@@ -98,7 +95,7 @@ mod tests {
         fold.observe(false);
         fold.observe(true);
         fold.observe(false);
-        assert!(fold.observe(true));
+        fold.observe(true);
         assert!(fold.collapsed());
     }
 
@@ -109,7 +106,7 @@ mod tests {
         fold.toggle();
         fold.observe(false);
         fold.observe(false);
-        assert!(fold.observe(true));
+        fold.observe(true);
         assert!(fold.collapsed());
     }
 
