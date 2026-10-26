@@ -14,6 +14,7 @@ use app_core::session_tree::{
     TabEntry, Tone, display_path, session_title,
 };
 use app_core::sessions::SessionStore;
+use app_core::sidebar_order::SidebarOrder;
 use app_core::split_tree::NodeId;
 use app_core::text_field::TextField;
 use app_core::theme_colors::ToneColors;
@@ -141,6 +142,8 @@ pub struct SidebarView {
     tabs: Vec<TabEntry>,
     arrivals: Arrivals,
     order: ProjectOrder,
+    /// The order the user gave projects and tabs, as saved in the layout.
+    saved_order: SidebarOrder,
     filter: TextField,
     /// The row being renamed and its text field.
     renaming: Option<(RenameTarget, TextField)>,
@@ -208,6 +211,7 @@ impl SidebarView {
             tabs: Vec::new(),
             arrivals: Arrivals::default(),
             order: ProjectOrder::default(),
+            saved_order: SidebarOrder::default(),
             filter: TextField::default(),
             renaming: None,
             toggled: HashSet::new(),
@@ -496,6 +500,15 @@ impl SidebarView {
         cx.notify();
     }
 
+    /// The order saved in the layout: where projects and tabs sit until the user moves them.
+    pub fn set_saved_order(&mut self, order: SidebarOrder, cx: &mut Context<Self>) {
+        if !order.projects.is_empty() {
+            self.order.seed(&order.projects);
+        }
+        self.saved_order = order;
+        self.rebuild(cx);
+    }
+
     /// The workspace's panes and tabs.
     pub fn set_panes(&mut self, panes: Vec<PaneEntry>, tabs: Vec<TabEntry>, cx: &mut Context<Self>) {
         if panes != self.panes || tabs != self.tabs {
@@ -566,6 +579,7 @@ impl SidebarView {
                     marked: &self.marked,
                     tabs: &self.tabs,
                     project_of: &project_of,
+                    saved_order: &self.saved_order,
                     now_ms,
                 };
                 session_tree::active(&input, arrivals, order)

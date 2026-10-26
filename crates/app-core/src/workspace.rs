@@ -12,6 +12,7 @@ use crate::attention::most_urgent;
 use crate::launcher::HostFolder;
 use crate::sessions::SessionStore;
 use crate::settings::{Settings, ShellSettings, expand_home};
+use crate::sidebar_order::SidebarOrder;
 use crate::split_tree::{Axis, Direction, DropZone, Node, NodeId};
 use crate::theme_colors::{ProjectColor, Tint};
 
@@ -559,6 +560,9 @@ pub struct Workspace {
     /// Each SSH host's most recently used folders, kept while the host is away so the launcher can still list them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub host_folders: BTreeMap<HostId, Vec<HostFolder>>,
+    /// The order the user gave projects and tabs in the sidebar.
+    #[serde(default, skip_serializing_if = "SidebarOrder::is_empty")]
+    pub sidebar_order: SidebarOrder,
     /// Finished tabs and leaves that "Running only" dropped at startup; written back into every saved copy
     /// so that switching to "Restore tabs and panes" brings them back.
     #[serde(skip)]

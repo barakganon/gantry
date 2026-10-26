@@ -8,6 +8,7 @@ use protocol::host::{HostId, PaneKey, project_key, split_project_key};
 use protocol::message::{SessionInfo, SessionState, SessionStatus};
 
 use crate::fuzzy::Fuzzy;
+use crate::sidebar_order::SidebarOrder;
 use crate::split_tree::NodeId;
 use crate::theme_colors::Tint;
 
@@ -92,15 +93,29 @@ impl Arrivals {
     }
 }
 
-/// The sidebar's project order for this run: activity order at first, then stable; new projects go on top; the
-/// user can drag one. Never saved.
+/// The sidebar's project order: the saved one if there is one, else activity order at first; then stable; new
+/// projects go on top; the user can drag one.
 #[derive(Debug, Default)]
 pub struct ProjectOrder {
     order: Vec<PathBuf>,
     started: bool,
+    /// Projects from the saved order: kept even while not listed (an SSH host that is away).
+    kept: HashSet<PathBuf>,
 }
 
 impl ProjectOrder {
+    /// Start from the saved order `saved` (top to bottom), which also keeps projects that are not listed for now.
+    pub fn seed(&mut self, saved: &[PathBuf]) {
+        self.order = saved.to_vec();
+        self.kept = saved.iter().cloned().collect();
+        self.started = true;
+    }
+
+    /// The projects in order, top to bottom (including kept ones that are not listed).
+    pub fn projects(&self) -> &[PathBuf] {
+        &self.order
+    }
+
     /// Fold in the projects listed now, latest activity first. The first call without a filter takes that order. Later calls put
     /// unknown projects on top (in the given order) and forget projects no longer listed. While `filtering`, only
     /// add, never forget.
@@ -114,7 +129,7 @@ impl ProjectOrder {
             return;
         }
         if !filtering {
-            self.order.retain(|known| by_activity.contains(known));
+            self.order.retain(|known| by_activity.contains(known) || self.kept.contains(known));
         }
         let new: Vec<PathBuf> = by_activity.iter().filter(|path| !self.order.contains(path)).cloned().collect();
         self.order.splice(0..0, new);
@@ -170,6 +185,8 @@ pub struct ActiveInput<'a> {
     pub tabs: &'a [TabEntry],
     /// The project a directory belongs to (see [`project_root`]).
     pub project_of: &'a dyn Fn(&HostId, &Path) -> PathBuf,
+    /// The order the user gave the tabs inside their projects.
+    pub saved_order: &'a SidebarOrder,
     /// Current time, ms since the Unix epoch.
     pub now_ms: u64,
 }
@@ -595,12 +612,17 @@ pub fn active(input: &ActiveInput<'_>, arrivals: &mut Arrivals, order: &mut Proj
         items_of.entry(group.project.clone()).or_default().push(Item::Group(group));
     }
     let mut projects: Vec<(PathBuf, Vec<Item<'_>>)> = items_of.into_iter().collect();
+    // Tabs the user placed come below the new ones (newest first), in their saved order; outside sessions have no
+    // saved place.
     for (_, items) in &mut projects {
         items.sort_by_key(|item| {
-            std::cmp::Reverse(match item {
-                Item::Single(entry) => arrivals.of(&entry.key),
-                Item::Group(group) => group.place,
-            })
+            let (rank, arrival) = match item {
+                Item::Single(entry) => {
+                    (leaf_of(&entry.key).and_then(|leaf| input.saved_order.rank_of(&[leaf])), arrivals.of(&entry.key))
+                }
+                Item::Group(group) => (input.saved_order.rank_of(&group.tab.leaves), group.place),
+            };
+            (rank.is_some(), rank.unwrap_or(0), std::cmp::Reverse(arrival))
         });
     }
     // Sessions decide; a project with only shells or new leaves counts as now.
@@ -981,6 +1003,7 @@ mod tests {
         tabs: Vec<TabEntry>,
         arrivals: Arrivals,
         order: ProjectOrder,
+        saved: crate::sidebar_order::SidebarOrder,
     }
 
     impl Fixture {
@@ -1001,6 +1024,7 @@ mod tests {
                 marked: &self.marked,
                 tabs: &self.tabs,
                 project_of: &project_of,
+                saved_order: &self.saved,
                 now_ms: NOW,
             };
             active(&input, &mut self.arrivals, &mut self.order)
@@ -1398,6 +1422,41 @@ mod tests {
         let mut sorted = paths(&["/c", "/b", "/a"]);
         sorted.sort_by_key(|p| order.position(p));
         assert_eq!(sorted, paths(&["/a", "/b", "/c"]));
+    }
+
+    #[test]
+    fn saved_order_decides_item_places_inside_a_project() {
+        let mut fixture = Fixture::of(vec![], (1..=3).map(|leaf| shell_pane(leaf, "/r/app")).collect());
+        assert_eq!(keys(&fixture.rows())[1..], [RowKey::Leaf(3), RowKey::Leaf(2), RowKey::Leaf(1)]);
+        fixture.saved.items = vec![1, 3, 2, 77];
+        assert_eq!(keys(&fixture.rows())[1..], [RowKey::Leaf(1), RowKey::Leaf(3), RowKey::Leaf(2)]);
+        fixture.panes.push(shell_pane(4, "/r/app"));
+        assert_eq!(
+            keys(&fixture.rows())[1..],
+            [RowKey::Leaf(4), RowKey::Leaf(1), RowKey::Leaf(3), RowKey::Leaf(2)],
+            "a tab that is not in the saved order is new and goes on top"
+        );
+    }
+
+    #[test]
+    fn a_split_tab_is_ranked_by_its_best_leaf() {
+        let mut fixture = Fixture::of(vec![], (1..=3).map(|leaf| shell_pane(leaf, "/r/app")).collect());
+        fixture.tabs = vec![tab(0, 2, &[2, 3])];
+        assert_eq!(keys(&fixture.rows())[1], RowKey::Tab(2), "newest first without a saved order");
+        fixture.saved.items = vec![1, 3];
+        let rows = keys(&fixture.rows());
+        assert_eq!(rows[1], RowKey::Leaf(1));
+        assert_eq!(rows[2], RowKey::Tab(2));
+    }
+
+    #[test]
+    fn seeded_project_order_keeps_projects_that_are_not_listed() {
+        let mut order = ProjectOrder::default();
+        order.seed(&paths(&["/a", "/b", "/c"]));
+        order.update(&paths(&["/b", "/a"]), false);
+        assert_eq!(order.projects(), paths(&["/a", "/b", "/c"]).as_slice());
+        order.update(&paths(&["/b", "/a", "/d"]), false);
+        assert_eq!(order.projects(), paths(&["/d", "/a", "/b", "/c"]).as_slice(), "a new project goes on top");
     }
 
     #[test]

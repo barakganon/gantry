@@ -130,6 +130,20 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_order_round_trips_and_old_layouts_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        let mut workspace = sample();
+        save(&path, &workspace).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("sidebar_order"), "an empty order is not written: {text}");
+        workspace.sidebar_order.record(&["/a".into(), "ssh://box/b".into()], &[2, 1]);
+        save(&path, &workspace).unwrap();
+        assert_eq!(load(&path).unwrap(), Some(workspace.clone()));
+        assert_eq!(load(&path).unwrap().unwrap().sidebar_order.items, vec![2, 1]);
+    }
+
+    #[test]
     fn a_missing_file_is_no_layout() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(load(&dir.path().join("layout.json")).unwrap(), None);
