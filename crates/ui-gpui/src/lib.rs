@@ -261,6 +261,35 @@ mod tests {
 
     const DESKTOP: &str = include_str!("../../../packaging/linux/io.github.idogrf.Gantry.desktop");
 
+    fn rust_files(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_files(&path, found);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                found.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn no_native_prompts_remain() {
+        let needles = [
+            concat!(".pro", "mpt("),
+            concat!("Prompt", "Level"),
+            concat!("\"Det", "ach\""),
+            concat!("\"Process ex", "ited"),
+        ];
+        let mut files = Vec::new();
+        rust_files(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            for needle in needles {
+                assert!(!text.contains(needle), "{} still contains {needle}", file.display());
+            }
+        }
+    }
+
     #[test]
     fn resume_flag_resumes_only_what_was_live() {
         let mut window = app_core::settings::Settings::default().window;

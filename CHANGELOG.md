@@ -14,6 +14,12 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Reorder tabs** - Drag a tab (or a split tab's heading) up or down inside its project; a line shows where it lands. Dropping it on another project does nothing, and tabs cannot be moved while the sidebar filter has text.
 
 ### Changed
+- **Clearer dialogs** - Every pop-up is now drawn by Gantry, says what is running and what each button does.
+  - Quit tells you how many Claude sessions and terminals are running (and how many are working) and offers Keep sessions running or Stop all and quit.
+  - Disconnecting from an SSH host says whether its sessions keep running on the host.
+  - The other pop-ups (closing a pane or tab, taking over a session, dev container choice, background service out of date) use the same dialog.
+  - The card shown when a process ended is now a slim bar at the bottom of the pane, with the exit status and the buttons.
+- **Resume conversation** - "Continue" is now "Resume conversation" in the pane bar, the right-click menus, the welcome screen and Settings.
 - **Project headings** - The project name now sits at the left edge, left of the session bars, and the project dot and the fold chevron are together at the right, joined to the name by a hairline (left out when the name leaves no room for it); the tabs under it start 10 px further right.
 - **Split tab names** - A split tab without a name of its own is titled with its first pane's name instead of the project's.
 - **Saved sidebar order** - The order of projects and of the tabs inside them (what you set by dragging) is kept in the layout and restored when Gantry starts.
