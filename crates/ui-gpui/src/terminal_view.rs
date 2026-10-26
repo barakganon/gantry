@@ -852,7 +852,7 @@ impl TerminalView {
         let plain = !(event.modifiers.shift || event.modifiers.alt || event.modifiers.control);
         self.click_cell = (plain && event.click_count == 1).then_some((col, row));
         self.prompt_select = None;
-        self.term.start_selection(col, row, right_half);
+        self.term.start_selection_by(col, row, right_half, event.click_count);
         self.drag.selection_press();
         cx.notify();
     }

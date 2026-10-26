@@ -275,8 +275,19 @@ impl TermState {
 
     /// Begin a selection at a viewport cell.
     pub fn start_selection(&mut self, col: u16, row: u16, right_half: bool) {
+        self.start_selection_by(col, row, right_half, 1);
+    }
+
+    /// Begin a selection at a viewport cell by the click count: characters, the word there (double), its line
+    /// (triple).
+    pub fn start_selection_by(&mut self, col: u16, row: u16, right_half: bool, clicks: usize) {
+        let kind = match clicks {
+            2 => SelectionType::Semantic,
+            3.. => SelectionType::Lines,
+            _ => SelectionType::Simple,
+        };
         let point = self.viewport_point(col, row);
-        self.term.selection = Some(Selection::new(SelectionType::Simple, point, side(right_half)));
+        self.term.selection = Some(Selection::new(kind, point, side(right_half)));
     }
 
     /// Extend the current selection to a viewport cell.
@@ -665,6 +676,16 @@ mod tests {
         assert_eq!(t.prompt_text_at_end().as_deref(), Some("  2. "), "the typed space counts");
         t.feed(b"ab\x1b[D");
         assert_eq!(t.prompt_text_at_end(), None);
+    }
+
+    #[test]
+    fn a_double_click_selects_the_word_and_a_triple_its_line() {
+        let mut t = TermState::new(20, 2);
+        t.feed(b"fix teh_bug now");
+        t.start_selection_by(6, 0, false, 2);
+        assert_eq!(t.selection_text().as_deref(), Some("teh_bug"));
+        t.start_selection_by(6, 0, false, 3);
+        assert_eq!(t.selection_text().as_deref().map(str::trim_end), Some("fix teh_bug now"));
     }
 
     #[test]
