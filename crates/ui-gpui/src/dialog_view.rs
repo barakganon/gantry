@@ -78,16 +78,18 @@ fn frame(id: usize, focused: bool, theme: &Theme) -> Stateful<Div> {
         .border_color(rgb(if focused { theme.tokens.accent } else { theme.tokens.surface }))
 }
 
-fn label_color(style: ChoiceStyle, theme: &Theme) -> u32 {
+fn label_color(style: ChoiceStyle, pills: bool, theme: &Theme) -> u32 {
     match style {
         ChoiceStyle::Danger => theme.tokens.danger,
+        ChoiceStyle::Primary if pills => theme.tokens.on_accent,
         ChoiceStyle::Cancel => theme.tokens.muted,
         _ => theme.tokens.text,
     }
 }
 
-fn fill(style: ChoiceStyle, theme: &Theme) -> u32 {
+fn fill(style: ChoiceStyle, pills: bool, theme: &Theme) -> u32 {
     match style {
+        ChoiceStyle::Primary if pills => theme.tokens.accent,
         ChoiceStyle::Primary => mix(theme.tokens.accent, theme.tokens.surface, 0.18),
         _ => theme.tokens.raised,
     }
@@ -105,7 +107,7 @@ impl Render for DialogView {
             let click = cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(index, cx));
             let label = div()
                 .font_weight(if style == ChoiceStyle::Cancel { FontWeight::NORMAL } else { FontWeight::SEMIBOLD })
-                .text_color(rgb(label_color(style, &theme)))
+                .text_color(rgb(label_color(style, pills, &theme)))
                 .child(action.label.clone());
             let item = if style == ChoiceStyle::Cancel && !pills {
                 frame(index, focused, &theme).py(theme.ui(6.)).flex().justify_center().child(label)
@@ -113,13 +115,13 @@ impl Render for DialogView {
                 frame(index, focused, &theme)
                     .px(theme.ui(14.))
                     .py(theme.ui(7.))
-                    .bg(rgb(fill(style, &theme)))
+                    .bg(rgb(fill(style, pills, &theme)))
                     .child(label)
             } else {
                 frame(index, focused, &theme)
                     .px(theme.ui(12.))
                     .py(theme.ui(9.))
-                    .bg(rgb(fill(style, &theme)))
+                    .bg(rgb(fill(style, pills, &theme)))
                     .flex()
                     .flex_col()
                     .gap(theme.ui(2.))

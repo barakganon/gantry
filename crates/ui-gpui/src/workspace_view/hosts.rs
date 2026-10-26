@@ -208,6 +208,20 @@ impl WorkspaceView {
     /// Record `host`'s state and show it on the host's panes.
     fn set_host_state(&mut self, host: &HostId, state: HostState, cx: &mut Context<Self>) {
         self.host_states.insert(host.clone(), state);
+        if self.host_state(host) != HostState::Connected
+            && matches!(&self.dialog, Some(open) if matches!(&open.action, DialogAction::Disconnect(asked) if asked == host))
+        {
+            // The dialog asks about a connection that is gone: close it and give the focus back.
+            self.dialog = None;
+            if let Some(window) = cx.windows().into_iter().next() {
+                cx.spawn(async move |this, cx| {
+                    let _ = window.update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |view, cx| view.focus_current(window, cx));
+                    });
+                })
+                .detach();
+            }
+        }
         if self.is_away(host) {
             // Its sessions are not known any more; they are listed again when it connects.
             self.sidebar.update(cx, |sidebar, cx| sidebar.set_sessions(host, Vec::new(), cx));

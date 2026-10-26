@@ -1192,7 +1192,8 @@ impl Render for TerminalView {
                                 row.child(
                                     div()
                                         .flex()
-                                        .flex_none()
+                                        .flex_wrap()
+                                        .min_w_0()
                                         .gap(theme.ui(8.))
                                         .children(bar.rerun.clone().map(|label| {
                                             banner_button(
