@@ -19,6 +19,7 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **SSH hosts card** - The automatic collapse above four hosts and the "n of m connected" heading are gone; use the toggle.
 
 ### Fixed
+- **Running only no longer piles up tabs** - Finished tabs were kept in the saved layout while "Tabs at start" was Running only, so switching to Restore brought back every tab ever left finished, and started them all again. Running only now closes finished tabs for good (their conversations stay in recent sessions). A layout that already holds old ones loses them the first time Gantry starts and saves in Running only.
 - **Tab switching and SSH hosts** - Ctrl+Tab and Back/Forward no longer stop on tabs of an SSH host that is not connected; they come back once the host connects.
 
 ## [0.11.0] - 2026-10-25
