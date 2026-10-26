@@ -1,5 +1,5 @@
 use super::layout::start_rects;
-use super::{DialogAction, PendingOpen, Slot, WorkspaceView};
+use super::{DevContainerOpen, DialogAction, PendingOpen, Slot, WorkspaceView};
 use std::path::{Path, PathBuf};
 
 use app_core::attention::without_claude_glyph;
@@ -9,7 +9,7 @@ use app_core::split_tree::{Axis, NodeId};
 use app_core::workspace::{DirBadge, PaneLaunch};
 use app_core::{layout_store, window_state};
 use daemon::containers::GONE as CONTAINER_GONE;
-use gpui::{App, Context, Focusable, PromptLevel, Window, WindowBounds, prelude::*};
+use gpui::{App, Context, Focusable, Window, WindowBounds, prelude::*};
 use protocol::host::{HostId, PaneKey};
 use protocol::message::ContainerChoice;
 
@@ -177,7 +177,7 @@ impl WorkspaceView {
 
     /// Start a new Claude session (or shell) in `cwd`: Claude with the config dir `pick` names, else the one remembered
     /// for exactly this folder, else the default.
-    fn new_launch(
+    pub(super) fn new_launch(
         &self,
         claude: bool,
         cwd: PathBuf,
@@ -239,40 +239,15 @@ impl WorkspaceView {
         let folder = &container.host_folder;
         let project =
             folder.file_name().map_or_else(|| folder.display().to_string(), |name| name.to_string_lossy().into_owned());
-        let state = if container.running { "running" } else { "stopped, starts on open" };
-        let detail = format!("{} · {state}", container.name);
-        let answer = window.prompt(
-            PromptLevel::Info,
-            &format!("Open {project} in"),
-            Some(&detail),
-            &["Dev container", "This machine", "Cancel"],
-            cx,
-        );
-        cx.spawn_in(window, async move |this, cx| {
-            let answer = answer.await;
-            let _ = this.update_in(cx, |this, window, cx| match answer {
-                Ok(0) => {
-                    // Splits of a container pane start in the session's directory, not the docker client's.
-                    let launch = this.new_launch(claude, cwd, pick.as_deref(), Some(container.host_folder), cx);
-                    this.open_launch(launch, axis, None, HostId::local(), window, cx)
-                }
-                Ok(1) => {
-                    let launch = this.new_launch(claude, cwd, pick.as_deref(), None, cx);
-                    this.open_launch(launch, axis, cwd_from, host, window, cx)
-                }
-                _ => this.focus_current(window, cx),
-            });
-        })
-        .detach();
+        let spec = dialogs::dev_container(&project, &container.name, container.running);
+        let open = DevContainerOpen { claude, pick, cwd, axis, cwd_from, host, host_folder: container.host_folder };
+        self.open_dialog(spec, DialogAction::DevContainer(Box::new(open)), window, cx);
     }
 
     /// Say why a container session cannot be opened.
     pub(super) fn container_gone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let answer = window.prompt(PromptLevel::Info, "Cannot open this session", Some(CONTAINER_GONE), &["OK"], cx);
-        cx.spawn(async move |_, _| {
-            let _ = answer.await;
-        })
-        .detach();
+        let spec = dialogs::notice("Cannot open this session", CONTAINER_GONE);
+        self.open_dialog(spec, DialogAction::Ack, window, cx);
     }
 
     /// Start `launch` in a new tab, or splitting the focused pane along `axis` (a split runs on `host`).
@@ -305,7 +280,7 @@ impl WorkspaceView {
         self.save(cx);
     }
 
-    fn close_leaf(&mut self, leaf: NodeId, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn close_leaf(&mut self, leaf: NodeId, window: &mut Window, cx: &mut Context<Self>) {
         let from = self.drawn_rects();
         // A pane of the visible tab that keeps other panes: the survivors grow into its space.
         let swipe = from.len() > 1 && from.iter().any(|(drawn, _)| *drawn == leaf);
@@ -550,21 +525,12 @@ impl WorkspaceView {
             }
             return;
         }
-        let (title, detail) = if leaves.len() == 1 {
-            ("Close pane?", "Its process is still running.".to_string())
+        let spec = if leaves.len() == 1 {
+            let is_claude = self.slots.get(&leaves[0]).is_some_and(|slot| slot.view.read(cx).is_claude());
+            dialogs::close_pane(is_claude)
         } else {
-            ("Close tab?", format!("{running} running process(es) will be stopped."))
+            dialogs::close_tab(running)
         };
-        let answer = window.prompt(PromptLevel::Warning, title, Some(&detail), &["Close", "Cancel"], cx);
-        cx.spawn_in(window, async move |this, cx| {
-            if answer.await == Ok(0) {
-                let _ = this.update_in(cx, |this, window, cx| {
-                    for leaf in leaves {
-                        this.close_leaf(leaf, window, cx);
-                    }
-                });
-            }
-        })
-        .detach();
+        self.open_dialog(spec, DialogAction::ClosePanes(leaves), window, cx);
     }
 }

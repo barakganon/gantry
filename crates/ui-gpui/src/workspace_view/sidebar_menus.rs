@@ -1,7 +1,8 @@
-use super::{FindSession, OpenRecents, OpenSettings, TakeOverTarget, ToggleSidebar, WorkspaceView};
+use super::{DialogAction, FindSession, OpenRecents, OpenSettings, TakeOverTarget, ToggleSidebar, WorkspaceView};
 
 use app_core::attention::AlertKind;
-use gpui::{ClipboardItem, Context, Focusable, MouseButton, MouseMoveEvent, Pixels, Point, PromptLevel, Window};
+use app_core::dialogs;
+use gpui::{ClipboardItem, Context, Focusable, MouseButton, MouseMoveEvent, Pixels, Point, Window};
 use protocol::host::HostId;
 use protocol::message::SessionState;
 
@@ -115,11 +116,7 @@ impl WorkspaceView {
             }
             Err(error) => {
                 let detail = format!("Could not start VS Code (`code`): {error}");
-                let answer = window.prompt(PromptLevel::Warning, "Open in VS Code", Some(&detail), &["OK"], cx);
-                cx.spawn(async move |_, _| {
-                    let _ = answer.await;
-                })
-                .detach();
+                self.open_dialog(dialogs::notice("Open in VS Code", &detail), DialogAction::Ack, window, cx);
             }
         }
     }

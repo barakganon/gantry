@@ -1,4 +1,4 @@
-use super::{DialogAction, OpenDialog, OpenLauncher, OpenRecents, OpenSettings, WorkspaceView};
+use super::{DevContainerOpen, DialogAction, OpenDialog, OpenLauncher, OpenRecents, OpenSettings, WorkspaceView};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -226,6 +226,46 @@ impl WorkspaceView {
                 }
                 _ => {}
             },
+            DialogAction::ClosePanes(leaves) => {
+                if index == 0 {
+                    for leaf in leaves {
+                        self.close_leaf(leaf, window, cx);
+                    }
+                }
+            }
+            DialogAction::TakeOver { host, session, target } => {
+                if index == 0
+                    && let Some(client) = self.client(&host)
+                {
+                    client.take_over(&session, false);
+                    self.take_overs.insert((host, session), target);
+                }
+            }
+            DialogAction::ForceQuit { waiting } => {
+                if index == 0 {
+                    if let Some(client) = self.client(&waiting.0) {
+                        client.take_over(&waiting.1, true);
+                    }
+                } else {
+                    self.take_overs.remove(&waiting);
+                }
+            }
+            DialogAction::DevContainer(open) => {
+                let DevContainerOpen { claude, pick, cwd, axis, cwd_from, host, host_folder } = *open;
+                match index {
+                    0 => {
+                        // Splits of a container pane start in the session's directory, not the docker client's.
+                        let launch = self.new_launch(claude, cwd, pick.as_deref(), Some(host_folder), cx);
+                        self.open_launch(launch, axis, None, HostId::local(), window, cx)
+                    }
+                    1 => {
+                        let launch = self.new_launch(claude, cwd, pick.as_deref(), None, cx);
+                        self.open_launch(launch, axis, cwd_from, host, window, cx)
+                    }
+                    _ => {}
+                }
+            }
+            DialogAction::Ack => {}
             DialogAction::Disconnect(host) => {
                 // The host may have changed while the dialog was up.
                 if self.host_state(&host) != HostState::Connected {

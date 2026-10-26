@@ -110,6 +110,28 @@ pub(super) enum DialogAction {
     Quit,
     /// Disconnect from an SSH host: 0 detach, 1 end its sessions and disconnect.
     Disconnect(HostId),
+    /// Close these leaves: 0 closes.
+    ClosePanes(Vec<NodeId>),
+    /// Take over `session` on `host`: 0 asks the daemon to stop it and remembers where to resume.
+    TakeOver { host: HostId, session: String, target: TakeOverTarget },
+    /// The session ignored the stop request: 0 force quits it, any other choice gives up the take over.
+    ForceQuit { waiting: (HostId, String) },
+    /// A new session in a folder a dev container mounts: 0 opens in the container, 1 on this machine.
+    DevContainer(Box<DevContainerOpen>),
+    /// A notice: nothing to do with the answer.
+    Ack,
+}
+
+/// What a new session needs once its dev container question is answered.
+pub(super) struct DevContainerOpen {
+    claude: bool,
+    pick: Option<String>,
+    cwd: PathBuf,
+    axis: Option<Axis>,
+    cwd_from: Option<PaneKey>,
+    host: HostId,
+    /// The folder the container mounts, on the host.
+    host_folder: PathBuf,
 }
 
 /// The dialog on screen with what its answer does.
@@ -120,7 +142,7 @@ pub(super) struct OpenDialog {
 }
 
 /// Where a taken-over session is resumed.
-enum TakeOverTarget {
+pub(super) enum TakeOverTarget {
     /// A new tab, or a split of the focused pane.
     NewPane {
         /// The session's directory.
