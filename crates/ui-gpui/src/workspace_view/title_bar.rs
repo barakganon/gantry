@@ -1,12 +1,12 @@
 use super::{OpenSettings, SIDEBAR_EDGE, WorkspaceView};
 use std::time::Duration;
 
-use app_core::release::{self, CheckStatus, NotesBlock, Online, Release};
+use app_core::release::{self, CheckStatus, Inline, NotesBlock, Online, Release};
 use app_core::version::{self, Update, Version};
 use daemon::paths::{Paths, current_profile};
 use gpui::{
-    Context, Decorations, Div, FocusHandle, FontWeight, IntoElement, MouseButton, MouseDownEvent, Task, Window, div,
-    img, prelude::*, px, rgb,
+    Context, Decorations, Div, FocusHandle, FontWeight, HighlightStyle, IntoElement, MouseButton, MouseDownEvent,
+    StyledText, Task, Window, div, img, prelude::*, px, rgb,
 };
 
 use app_core::session_tree::{Tone, display_path, leaf_tone, status_tone, tone_word};
@@ -512,6 +512,12 @@ pub(crate) fn round_button(
         .on_click(on_click)
 }
 
+/// `inline` with its bold parts drawn bold.
+fn inline_text(inline: &Inline) -> StyledText {
+    let bold = HighlightStyle { font_weight: Some(FontWeight::BOLD), ..Default::default() };
+    StyledText::new(inline.text.clone()).with_highlights(inline.bold.iter().map(|range| (range.clone(), bold)))
+}
+
 /// One release's heading and notes for the release card.
 fn release_section(theme: &Theme, release: &Release) -> Div {
     let heading = if release.date.is_empty() {
@@ -537,8 +543,8 @@ fn release_section(theme: &Theme, release: &Release) -> Div {
                     .text_xs()
                     .text_color(text)
                     .child(div().flex_none().child("•"))
-                    .child(div().flex_1().min_w_0().child(item)),
-                NotesBlock::Line(line) => div().text_xs().text_color(text).child(line),
+                    .child(div().flex_1().min_w_0().child(inline_text(&item))),
+                NotesBlock::Line(line) => div().text_xs().text_color(text).child(inline_text(&line)),
                 NotesBlock::Gap => div().h(theme.ui(4.)),
             })
         },

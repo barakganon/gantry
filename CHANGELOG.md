@@ -23,6 +23,7 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 - **Tab switching and SSH hosts** - Ctrl+Tab and Back/Forward no longer stop on tabs of an SSH host that is not connected; they come back once the host connects.
+- **Bold in release notes** - The release notes card under the ↑ Update pill shows `**bold**` text in bold instead of the asterisks.
 
 ## [0.11.0] - 2026-10-25
 
