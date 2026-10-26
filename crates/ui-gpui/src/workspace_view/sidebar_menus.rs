@@ -92,8 +92,7 @@ impl WorkspaceView {
                     cx.notify();
                 }
             }
-            // The picker arrives with the next task; until then the menu entry does nothing.
-            MenuAction::CustomColor(_) => {}
+            MenuAction::CustomColor(target) => self.show_color_picker(target, window, cx),
             MenuAction::RecentsFor(project) => self.show_recents(Some(project), window, cx),
             MenuAction::Continue(leaf) => {
                 self.focus_leaf(leaf, window, cx);

@@ -2,6 +2,7 @@
 
 pub mod attention;
 pub mod bidi;
+pub mod color_math;
 pub mod dir_complete;
 pub mod fuzzy;
 pub mod git_diff;

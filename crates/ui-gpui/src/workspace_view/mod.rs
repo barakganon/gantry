@@ -28,6 +28,7 @@ use protocol::host::{HostId, PaneKey};
 use app_core::settings::SshHost;
 
 use crate::askpass_view::AskpassView;
+use crate::color_picker_view::ColorPickerView;
 use crate::context_menu::OpenMenu;
 use crate::git_diff_view::DiffState;
 use crate::git_panel::PanelTab;
@@ -282,6 +283,8 @@ pub struct WorkspaceView {
     askpass: Option<(Entity<AskpassView>, Subscription)>,
     /// Questions waiting for the one on screen.
     askpass_queue: VecDeque<AskPrompt>,
+    /// The custom color picker on screen.
+    color_picker: Option<(Entity<ColorPickerView>, Subscription)>,
     /// Receives ssh's questions.
     _askpass_task: Task<()>,
     layout_file: PathBuf,
@@ -540,6 +543,7 @@ impl WorkspaceView {
             askpass_prompts,
             askpass: None,
             askpass_queue: VecDeque::new(),
+            color_picker: None,
             _askpass_task: askpass_task,
             layout_file,
             default_cwd,
