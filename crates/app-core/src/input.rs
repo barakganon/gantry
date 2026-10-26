@@ -117,6 +117,30 @@ fn csi_u(code: u32, m: u8) -> Vec<u8> {
     if m > 1 { format!("\x1b[{code};{m}u") } else { format!("\x1b[{code}u") }.into_bytes()
 }
 
+/// macOS text-editing keys as the readline/Emacs bytes shells and Claude read (iTerm's "Natural Text Editing"):
+/// Cmd+←/→ line start/end, Option+←/→ word back/forward, Cmd+Backspace / Cmd+Delete delete to line start/end,
+/// Option+Delete deletes the next word. `None` for any other key.
+pub fn text_edit_key(input: &KeyInput) -> Option<&'static [u8]> {
+    if input.ctrl || input.shift {
+        return None;
+    }
+    match (input.platform, input.alt, input.key.as_str()) {
+        (true, false, "left") => Some(b"\x01"),
+        (true, false, "right") => Some(b"\x05"),
+        (true, false, "backspace") => Some(b"\x15"),
+        (true, false, "delete") => Some(b"\x0b"),
+        (false, true, "left") => Some(b"\x1bb"),
+        (false, true, "right") => Some(b"\x1bf"),
+        (false, true, "delete") => Some(b"\x1bd"),
+        _ => None,
+    }
+}
+
+/// `count` presses of → (← for a negative count).
+pub fn arrow_presses(count: i32, app_cursor: bool) -> Vec<u8> {
+    cursor_key(if count > 0 { 'C' } else { 'D' }, 1, app_cursor).repeat(count.unsigned_abs() as usize)
+}
+
 fn cursor_key(letter: char, m: u8, app_cursor: bool) -> Vec<u8> {
     if m > 1 {
         format!("\x1b[1;{m}{letter}")
@@ -194,6 +218,25 @@ mod tests {
         assert_eq!(enc("f1", "", LEGACY), Some(b"\x1bOP".to_vec()));
         assert_eq!(enc("f5", "", LEGACY), Some(b"\x1b[15~".to_vec()));
         assert_eq!(enc("f12", "s", LEGACY), Some(b"\x1b[24;2~".to_vec()));
+    }
+
+    #[test]
+    fn mac_editing_keys_become_readline_bytes() {
+        let edit = |name: &str, mods: &str| text_edit_key(&key(name, mods));
+        assert_eq!(edit("left", "p"), Some(&b"\x01"[..]));
+        assert_eq!(edit("right", "p"), Some(&b"\x05"[..]));
+        assert_eq!(edit("backspace", "p"), Some(&b"\x15"[..]));
+        assert_eq!(edit("left", "a"), Some(&b"\x1bb"[..]));
+        assert_eq!(edit("right", "a"), Some(&b"\x1bf"[..]));
+        assert_eq!(edit("left", ""), None, "plain arrows stay arrows");
+        assert_eq!(edit("left", "ps"), None, "Shift keeps its meaning");
+        assert_eq!(edit("c", "p"), None);
+    }
+
+    #[test]
+    fn arrow_presses_repeat_the_cursor_key() {
+        assert_eq!(arrow_presses(2, false), b"\x1b[C\x1b[C".to_vec());
+        assert_eq!(arrow_presses(-1, true), b"\x1bOD".to_vec());
     }
 
     #[test]

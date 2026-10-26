@@ -11,7 +11,7 @@ use app_core::bidi::{RowOrder, logical_hit, to_display};
 use app_core::dialogs::{BarState, BarTone, PaneBar, pane_bar};
 use app_core::host_state::HostCard;
 use app_core::image_paste;
-use app_core::input::{KeyInput, encode_key};
+use app_core::input::{KeyInput, arrow_presses, encode_key, text_edit_key};
 use app_core::layout::grid_dims;
 use app_core::mouse::{self, MouseAction, MouseMods, encode_mouse};
 use app_core::paste::{encode_paste, quote_paths};
@@ -252,6 +252,8 @@ pub struct TerminalView {
     /// While the jump to bottom chip scrolls the view down: the offset it started at and when.
     jump: Option<(usize, Instant)>,
     drag: Drag,
+    /// Cell of a plain single click, which moves the prompt's cursor there when released without dragging.
+    click_cell: Option<(u16, u16)>,
     mouse_position: Option<Point<Pixels>>,
     hovered_link: Option<(u16, Range<usize>)>,
     /// Display order of each viewport row in the last frame (`None`: drawn as stored).
@@ -299,6 +301,7 @@ impl TerminalView {
             scrollbar_timer: None,
             jump: None,
             drag: Drag::default(),
+            click_cell: None,
             mouse_position: None,
             hovered_link: None,
             row_orders: Vec::new(),
@@ -528,6 +531,14 @@ impl TerminalView {
             cx.stop_propagation();
             return;
         }
+        if cfg!(target_os = "macos")
+            && !self.term.alt_screen()
+            && let Some(bytes) = text_edit_key(&input)
+        {
+            self.send_input(bytes, cx);
+            cx.stop_propagation();
+            return;
+        }
         if let Some(bytes) = encode_key(&input, self.term.key_modes()) {
             tracing::debug!(key = %keystroke.key, kitty = self.term.key_modes().kitty_disambiguate, "encoded key");
             self.send_input(&bytes, cx);
@@ -651,6 +662,8 @@ impl TerminalView {
         if event.button != MouseButton::Left {
             return;
         }
+        let plain = !(event.modifiers.shift || event.modifiers.alt || event.modifiers.control);
+        self.click_cell = (plain && event.click_count == 1).then_some((col, row));
         self.term.start_selection(col, row, right_half);
         self.drag.selection_press();
         cx.notify();
@@ -795,8 +808,14 @@ impl TerminalView {
             self.report(MouseAction::Release(button), modifiers, cell.or(reported_cell));
             return;
         }
+        let click = self.click_cell.take();
         if self.term.selection_text().is_none() {
             self.term.clear_selection();
+            if let Some((col, row)) = cell.filter(|cell| click == Some(*cell))
+                && let Some(steps) = self.term.cursor_moves_to(col, row)
+            {
+                self.send_input(&arrow_presses(steps, self.term.key_modes().app_cursor), cx);
+            }
         }
         cx.notify();
     }

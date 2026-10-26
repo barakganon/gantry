@@ -306,6 +306,30 @@ impl TermState {
         (0..self.term.screen_lines() as i32).contains(&row).then_some((point.column.0, row as usize))
     }
 
+    /// How many characters the cursor must move to reach viewport cell `(col, row)`, negative for left. Only at a
+    /// prompt (main screen, not scrolled back) and on the cursor's line, soft-wrapped rows included; a cell past the
+    /// line's text means its end. `None` when it cannot or need not move.
+    pub fn cursor_moves_to(&self, col: u16, row: u16) -> Option<i32> {
+        let grid = self.term.grid();
+        if self.alt_screen() || grid.display_offset() != 0 {
+            return None;
+        }
+        let (cursor_col, cursor_row) = self.cursor_cell()?;
+        let (row, cols) = (row as usize, self.term.columns());
+        let text_end = self.row_text(row as u16).chars().count();
+        let end = if row == cursor_row { text_end.max(cursor_col) } else { text_end };
+        let (from, to) = ((cursor_row, cursor_col), (row, (col as usize).min(end)));
+        let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
+        let cell = |index: usize| &grid[Line((index / cols) as i32)][Column(index % cols)];
+        if (lo.0..hi.0).any(|row| !cell(row * cols + cols - 1).flags.contains(Flags::WRAPLINE)) {
+            return None;
+        }
+        let steps = (lo.0 * cols + lo.1..hi.0 * cols + hi.1)
+            .filter(|&index| !cell(index).flags.contains(Flags::WIDE_CHAR_SPACER))
+            .count() as i32;
+        (steps != 0).then_some(if from <= to { steps } else { -steps })
+    }
+
     /// Resolve the visible screen into plain data for rendering.
     pub fn snapshot(&self) -> ScreenSnapshot {
         let content = self.term.renderable_content();
@@ -433,6 +457,33 @@ mod tests {
     use super::*;
     use crate::palette::DARK;
     use crate::snapshot::Rgb;
+
+    #[test]
+    fn a_click_on_the_prompt_line_moves_the_cursor_there() {
+        let mut t = TermState::new(10, 3);
+        t.feed(b"hello");
+        assert_eq!(t.cursor_moves_to(1, 0), Some(-4));
+        assert_eq!(t.cursor_moves_to(8, 0), None, "past the text is the end, where the cursor already is");
+        t.feed(b"\x1b[3D");
+        assert_eq!(t.cursor_moves_to(9, 0), Some(3), "clamped to the end of the text");
+    }
+
+    #[test]
+    fn a_click_follows_soft_wraps_but_not_other_lines() {
+        let mut t = TermState::new(10, 3);
+        t.feed(b"abcdefghijkl");
+        assert_eq!(t.cursor_moves_to(3, 0), Some(-9), "from the wrapped row back to the first");
+        let mut t = TermState::new(10, 3);
+        t.feed(b"ab\r\ncd");
+        assert_eq!(t.cursor_moves_to(0, 0), None, "a previous line is not the prompt");
+    }
+
+    #[test]
+    fn no_click_to_move_on_the_alternate_screen() {
+        let mut t = TermState::new(10, 3);
+        t.feed(b"\x1b[?1049hhello");
+        assert_eq!(t.cursor_moves_to(0, 0), None);
+    }
 
     #[test]
     fn plain_text_lands_in_grid_and_moves_cursor() {
