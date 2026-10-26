@@ -117,24 +117,20 @@ fn csi_u(code: u32, m: u8) -> Vec<u8> {
     if m > 1 { format!("\x1b[{code};{m}u") } else { format!("\x1b[{code}u") }.into_bytes()
 }
 
-/// macOS text-editing keys as the readline/Emacs bytes shells and Claude read (iTerm's "Natural Text Editing"):
-/// Cmd+←/→ line start/end, Option+←/→ word back/forward, Cmd+Backspace / Cmd+Delete delete to line start/end,
-/// Option+Delete deletes the next word, Cmd+Z undoes. `None` for any other key.
-pub fn text_edit_key(input: &KeyInput) -> Option<&'static [u8]> {
-    if input.ctrl || input.shift {
-        return None;
-    }
-    match (input.platform, input.alt, input.key.as_str()) {
-        (true, false, "left") => Some(b"\x01"),
-        (true, false, "right") => Some(b"\x05"),
-        (true, false, "backspace") => Some(b"\x15"),
-        (true, false, "delete") => Some(b"\x0b"),
-        (true, false, "z") => Some(b"\x1f"),
-        (false, true, "left") => Some(b"\x1bb"),
-        (false, true, "right") => Some(b"\x1bf"),
-        (false, true, "delete") => Some(b"\x1bd"),
-        _ => None,
-    }
+/// The readline/Emacs bytes shells and Claude read for a Text editing action (`id` in `shortcuts::ACTIONS`), like
+/// iTerm's "Natural Text Editing". `None` for the selection actions and anything else.
+pub fn edit_bytes(id: &str) -> Option<&'static [u8]> {
+    Some(match id {
+        "lineStart" => b"\x01",
+        "lineEnd" => b"\x05",
+        "wordLeft" => b"\x1bb",
+        "wordRight" => b"\x1bf",
+        "deleteToLineStart" => b"\x15",
+        "deleteToLineEnd" => b"\x0b",
+        "deleteWordRight" => b"\x1bd",
+        "undoEdit" => b"\x1f",
+        _ => return None,
+    })
 }
 
 /// `count` presses of → (← for a negative count).
@@ -222,17 +218,13 @@ mod tests {
     }
 
     #[test]
-    fn mac_editing_keys_become_readline_bytes() {
-        let edit = |name: &str, mods: &str| text_edit_key(&key(name, mods));
-        assert_eq!(edit("left", "p"), Some(&b"\x01"[..]));
-        assert_eq!(edit("right", "p"), Some(&b"\x05"[..]));
-        assert_eq!(edit("backspace", "p"), Some(&b"\x15"[..]));
-        assert_eq!(edit("left", "a"), Some(&b"\x1bb"[..]));
-        assert_eq!(edit("right", "a"), Some(&b"\x1bf"[..]));
-        assert_eq!(edit("left", ""), None, "plain arrows stay arrows");
-        assert_eq!(edit("left", "ps"), None, "Shift keeps its meaning");
-        assert_eq!(edit("z", "p"), Some(&b"\x1f"[..]), "undo");
-        assert_eq!(edit("c", "p"), None);
+    fn editing_actions_become_readline_bytes() {
+        assert_eq!(edit_bytes("lineStart"), Some(&b"\x01"[..]));
+        assert_eq!(edit_bytes("wordRight"), Some(&b"\x1bf"[..]));
+        assert_eq!(edit_bytes("undoEdit"), Some(&b"\x1f"[..]));
+        assert_eq!(edit_bytes("selectLine"), None, "selection is drawn here, not sent");
+        let editing = crate::shortcuts::ACTIONS.iter().filter(|a| a.group == crate::shortcuts::Group::Editing);
+        assert!(editing.clone().all(|a| edit_bytes(a.id).is_some() || a.id.starts_with("select")));
     }
 
     #[test]

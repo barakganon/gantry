@@ -11,7 +11,7 @@ use app_core::bidi::{RowOrder, logical_hit, to_display};
 use app_core::dialogs::{BarState, BarTone, PaneBar, pane_bar};
 use app_core::host_state::HostCard;
 use app_core::image_paste;
-use app_core::input::{KeyInput, arrow_presses, encode_key, text_edit_key};
+use app_core::input::{KeyInput, arrow_presses, edit_bytes, encode_key};
 use app_core::layout::grid_dims;
 use app_core::mouse::{self, MouseAction, MouseMods, encode_mouse};
 use app_core::paste::{encode_paste, quote_paths};
@@ -21,6 +21,7 @@ use app_core::scroll::{
 };
 use app_core::session_tree::Tone;
 use app_core::settings::Settings;
+use app_core::shortcuts::{self, Group, Platform};
 use app_core::snapshot::{CellStyle, Rgb, ScreenSnapshot, row_spans};
 use app_core::term_state::{Reach, TermState};
 use app_core::theme_colors::{deepen, mix, terminal_palette};
@@ -495,26 +496,26 @@ impl TerminalView {
 
     /// Text-field selection on the prompt line: Shift+arrows by character, with Option by word, with Cmd to the line's
     /// edge; Cmd+A selects the whole line. Returns whether the key was taken.
-    fn select_on_prompt(&mut self, input: &KeyInput, cx: &mut Context<Self>) -> bool {
+    fn select_on_prompt(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
         let Some(cursor) = self.term.prompt_cursor() else { return false };
-        let (anchor, focus) = match input.key.as_str() {
-            "a" if input.platform && !(input.shift || input.alt || input.ctrl) => {
-                let Some(line) = self.term.prompt_line() else { return false };
-                line
+        let (reach, forward) = match id {
+            "selectLine" => {
+                let Some((anchor, focus)) = self.term.prompt_line() else { return false };
+                self.term.select_cells(anchor, focus);
+                self.prompt_select = Some((anchor, focus));
+                cx.notify();
+                return true;
             }
-            key @ ("left" | "right") if input.shift && !input.ctrl => {
-                let reach = if input.platform {
-                    Reach::Line
-                } else if input.alt {
-                    Reach::Word
-                } else {
-                    Reach::Char
-                };
-                let (anchor, focus) = self.prompt_select.unwrap_or((cursor, cursor));
-                (anchor, self.term.prompt_step(focus, reach, key == "right"))
-            }
+            "selectLeft" => (Reach::Char, false),
+            "selectRight" => (Reach::Char, true),
+            "selectWordLeft" => (Reach::Word, false),
+            "selectWordRight" => (Reach::Word, true),
+            "selectToLineStart" => (Reach::Line, false),
+            "selectToLineEnd" => (Reach::Line, true),
             _ => return false,
         };
+        let (anchor, focus) = self.prompt_select.unwrap_or((cursor, cursor));
+        let (anchor, focus) = (anchor, self.term.prompt_step(focus, reach, forward));
         self.term.select_cells(anchor, focus);
         self.prompt_select = Some((anchor, focus));
         cx.notify();
@@ -580,15 +581,14 @@ impl TerminalView {
             cx.stop_propagation();
             return;
         }
-        if cfg!(target_os = "macos") && self.select_on_prompt(&input, cx) {
-            cx.stop_propagation();
-            return;
-        }
-        if cfg!(target_os = "macos")
+        if let Some(id) = editing_action(keystroke, cx)
             && !self.term.alt_screen()
-            && let Some(bytes) = text_edit_key(&input)
         {
-            self.send_input(bytes, cx);
+            match edit_bytes(id) {
+                Some(bytes) => self.send_input(bytes, cx),
+                None if self.select_on_prompt(id, cx) => {}
+                None => return,
+            }
             cx.stop_propagation();
             return;
         }
@@ -1468,6 +1468,21 @@ fn paint_text(
     if let Err(err) = line.paint(point(origin.x + inset, origin.y), m.height, TextAlign::Left, None, window, cx) {
         tracing::warn!("painting text failed: {err:#}");
     }
+}
+
+/// The Text editing action (settings key) bound to `keystroke` in the user's shortcuts, if any.
+fn editing_action(keystroke: &gpui::Keystroke, cx: &App) -> Option<&'static str> {
+    let settings = cx.global::<SettingsStore>().settings();
+    let platform = Platform::current();
+    let same = |bound: &gpui::Keystroke| {
+        let (a, b) = (&bound.modifiers, &keystroke.modifiers);
+        bound.key == keystroke.key && (a.control, a.alt, a.shift, a.platform) == (b.control, b.alt, b.shift, b.platform)
+    };
+    shortcuts::ACTIONS.iter().filter(|action| action.group == Group::Editing).map(|action| action.id).find(|id| {
+        shortcuts::current(id, &settings.shortcuts, platform)
+            .and_then(|key| gpui::Keystroke::parse(&key).ok())
+            .is_some_and(|bound| same(&bound))
+    })
 }
 
 /// The first image on the clipboard that the daemon can save: PNG, JPEG, GIF or WebP, within the size cap. A
