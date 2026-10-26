@@ -85,6 +85,15 @@ impl WorkspaceView {
                     settings.project_colors.folders.remove(&root);
                 }
             }),
+            MenuAction::SetPaneColor { leaf, color } => {
+                if self.workspace.set_leaf_color(leaf, color) {
+                    self.save(cx);
+                    self.sync_panes(cx);
+                    cx.notify();
+                }
+            }
+            // The picker arrives with the next task; until then the menu entry does nothing.
+            MenuAction::CustomColor(_) => {}
             MenuAction::RecentsFor(project) => self.show_recents(Some(project), window, cx),
             MenuAction::Continue(leaf) => {
                 self.focus_leaf(leaf, window, cx);
@@ -151,11 +160,12 @@ impl WorkspaceView {
                 .and_then(|id| sessions.get(&leaf.host, id))
                 .and_then(|info| info.container.clone());
             let vscode = menus::vscode_args(&leaf.launch.cwd, place.as_ref(), leaf.launch.container.as_deref());
-            let context = if leaf.launch.container.is_some() || !leaf.host.is_local() {
+            let mut context = if leaf.launch.container.is_some() || !leaf.host.is_local() {
                 MenuContext::default()
             } else {
                 MenuContext::for_folder(cx.global::<SettingsStore>().settings(), &leaf.launch.cwd)
             };
+            context.pane_color = Some((tab.focused, leaf.color));
             let idle = leaf.session.as_deref().and_then(|id| sessions.get(&leaf.host, id)).is_some_and(|info| {
                 matches!(info.state, SessionState::Managed { .. })
                     && status_tone(info.status.as_ref(), Unseen::No) == Tone::Idle

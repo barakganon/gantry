@@ -602,7 +602,7 @@ mod tests {
     #[test]
     fn tint_round_trips_as_setting() {
         use super::{ProjectColor, Tint};
-        assert_eq!(Tint::Custom(0xAB12ef).to_setting(), "#ab12ef");
+        assert_eq!(Tint::Custom(0xab12ef).to_setting(), "#ab12ef");
         assert_eq!(Tint::Palette(ProjectColor::Teal).to_setting(), "teal");
         for tint in [Tint::Custom(0x00ff10), Tint::Palette(ProjectColor::Pink)] {
             assert_eq!(Tint::parse(&tint.to_setting()), Some(tint));

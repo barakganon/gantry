@@ -32,8 +32,8 @@ use crate::hover_card::{self, HostsCard, HoverCard, Lead, lead};
 use crate::pane_drag::DraggedPane;
 use crate::settings_store::{SettingsStore, dir_badge_for, shortcut_label};
 use crate::theme::{
-    RADIUS, Theme, UI_FONT, container_icon, dir_badge, group_tint, pin_icon, side_line, ssh_icon, sweeping, theme,
-    working_sweep,
+    RADIUS, Theme, UI_FONT, container_icon, dir_badge, group_tint, pane_marker, pin_icon, side_line, ssh_icon,
+    sweeping, theme, working_sweep,
 };
 
 /// Every row is this tall (the list is uniform); session rows draw a pill inside it.
@@ -721,8 +721,16 @@ impl SidebarView {
             RowKind::Pane { entry, .. } => !entry.host.is_local(),
             _ => false,
         };
-        let context =
+        let mut context =
             folder.filter(|_| !remote).map(|folder| MenuContext::for_folder(settings, folder)).unwrap_or_default();
+        let menu_leaf = match &row.kind {
+            RowKind::Session { leaf, .. } => *leaf,
+            RowKind::Pane { entry, .. } => Some(entry.leaf),
+            _ => None,
+        };
+        context.pane_color = menu_leaf
+            .and_then(|leaf| self.panes.iter().find(|pane| pane.leaf == leaf))
+            .map(|pane| (pane.leaf, pane.color));
         let alone = |leaf: NodeId| self.panes.iter().find(|pane| pane.leaf == leaf).is_none_or(|pane| pane.alone);
         let items = match &row.kind {
             RowKind::Project { path, .. } => {
@@ -890,9 +898,23 @@ impl SidebarView {
         };
         // The row's project color, as a side line inside the pill's left edge.
         let line = row.project.as_ref().and_then(|root| theme.project(root));
-        let lined = |pill: gpui::Div| match line {
-            Some(color) => pill.relative().pl(theme.ui(18.)).child(side_line(color, &theme)),
-            None => pill,
+        // The pane's own color, as a second bar beside it; a split tab's heading shows only the project line.
+        let pane_color = match &row.kind {
+            RowKind::Session { leaf: Some(leaf), .. } => {
+                self.panes.iter().find(|pane| pane.leaf == *leaf).and_then(|pane| pane.color)
+            }
+            RowKind::Pane { entry, .. } => entry.color,
+            _ => None,
+        }
+        .map(|tint| tint.value(theme.preset));
+        let lined = |pill: gpui::Div| match (line, pane_color) {
+            (Some(color), marker) => pill
+                .relative()
+                .pl(theme.ui(30.))
+                .child(side_line(color, &theme))
+                .children(marker.map(|marker| pane_marker(marker, 12., &theme))),
+            (None, Some(marker)) => pill.relative().pl(theme.ui(18.)).child(pane_marker(marker, 4., &theme)),
+            (None, None) => pill,
         };
         let title = |text: String| div().flex_1().min_w_0().truncate().child(text);
         let aside =

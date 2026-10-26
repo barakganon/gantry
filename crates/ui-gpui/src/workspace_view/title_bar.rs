@@ -16,7 +16,8 @@ use crate::hover_card::{self, HoverCard};
 use crate::release_check::{self, CheckRow};
 use crate::settings_store::SettingsStore;
 use crate::theme::{
-    RADIUS, RADIUS_SMALL, Theme, container_icon, dir_badge, pin_icon, ssh_icon, sweeping, theme, working_sweep,
+    RADIUS, RADIUS_SMALL, Theme, container_icon, dir_badge, pane_marker, pin_icon, ssh_icon, sweeping, theme,
+    working_sweep,
 };
 use crate::update_watch::{self};
 use crate::window_frame;
@@ -410,6 +411,7 @@ impl WorkspaceView {
             host: remote.clone(),
             folder: cwd.as_deref().map(|cwd| display_path(cwd, std::env::home_dir().as_deref())),
         };
+        let marker = self.workspace.leaf_color(leaf).map(|tint| tint.value(theme.preset));
         let sidebar = self.sidebar.read(cx);
         let host = self.workspace.leaves.get(&leaf).map(|leaf| leaf.host.clone()).unwrap_or_default();
         let project = cwd.as_deref().map(|cwd| {
@@ -442,7 +444,8 @@ impl WorkspaceView {
                     .tooltip(hover_card::tooltip(card))
                     .relative()
                     .h(theme.ui(26.))
-                    .px(theme.ui(10.))
+                    .pr(theme.ui(10.))
+                    .pl(theme.ui(if marker.is_some() { 22. } else { 10. }))
                     .min_w_0()
                     .flex_shrink(1.)
                     .overflow_hidden()
@@ -454,6 +457,7 @@ impl WorkspaceView {
                     .font_weight(FontWeight::SEMIBOLD)
                     .when_some(colors.and_then(|colors| colors.fill), |chip, fill| chip.bg(rgb(fill)))
                     .when(sweep, |chip| chip.child(working_sweep("sweep-title", px(RADIUS_SMALL), &theme)))
+                    .when_some(marker, |chip, color| chip.child(pane_marker(color, 7., &theme)))
                     .children(pin)
                     .child(div().min_w_0().truncate().child(title))
                     .when(container, |chip| chip.child(container_icon(ink, &theme)))

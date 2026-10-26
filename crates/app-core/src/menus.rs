@@ -96,6 +96,15 @@ pub enum MenuAction {
         /// The color, or `None` for the automatic one.
         color: Option<Tint>,
     },
+    /// Set (`Some`) or clear (`None`, back to the project color) the color of a pane.
+    SetPaneColor {
+        /// The pane.
+        leaf: NodeId,
+        /// The color, or `None` for none.
+        color: Option<Tint>,
+    },
+    /// Open the custom color picker for a pane or a project.
+    CustomColor(ColorTarget),
     /// Take over a session running outside Gantry.
     TakeOver {
         /// Session id.
@@ -105,6 +114,15 @@ pub enum MenuAction {
         /// The host it runs on.
         host: HostId,
     },
+}
+
+/// What the custom color picker colors.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ColorTarget {
+    /// One pane.
+    Pane(NodeId),
+    /// A project, by its root.
+    Project(PathBuf),
 }
 
 /// One pickable menu entry.
@@ -150,6 +168,8 @@ pub struct MenuContext {
     /// The project's color: `None` = project colors are off (no Color menu), `Some(None)` = automatic,
     /// `Some(Some(c))` = picked.
     pub project_color: Option<Option<Tint>>,
+    /// The pane the menu is for and its own color: `None` = no "Tab color" menu.
+    pub pane_color: Option<(NodeId, Option<Tint>)>,
 }
 
 impl MenuContext {
@@ -173,6 +193,7 @@ impl MenuContext {
                 .project_colors
                 .enabled
                 .then(|| settings.project_colors.folders.get(folder).copied()),
+            pane_color: None,
         }
     }
 }
@@ -228,6 +249,7 @@ fn color_menu(root: &Path, current: Option<Tint>) -> MenuItem {
             })
         })
         .collect();
+    items.push(entry("Custom color…", MenuAction::CustomColor(ColorTarget::Project(root.to_path_buf()))));
     items.push(MenuItem::Entry(MenuEntry {
         label: "Automatic color".into(),
         shortcut: None,
@@ -237,6 +259,35 @@ fn color_menu(root: &Path, current: Option<Tint>) -> MenuItem {
         checked: current.is_none(),
     }));
     MenuItem::Submenu { label: "Color".into(), items }
+}
+
+/// "Tab color ▸": the eight swatches, "Custom color…", then "Reset to project color". Only for a menu that has a pane.
+fn pane_color_menu(context: &MenuContext) -> Option<MenuItem> {
+    let (leaf, current) = context.pane_color?;
+    let mut items: Vec<MenuItem> = ProjectColor::ALL
+        .into_iter()
+        .map(|color| {
+            let name = color.name();
+            MenuItem::Entry(MenuEntry {
+                label: format!("{}{}", name[..1].to_uppercase(), &name[1..]),
+                shortcut: None,
+                accent: false,
+                action: MenuAction::SetPaneColor { leaf, color: Some(Tint::Palette(color)) },
+                swatch: Some(color),
+                checked: current == Some(Tint::Palette(color)),
+            })
+        })
+        .collect();
+    items.push(entry("Custom color…", MenuAction::CustomColor(ColorTarget::Pane(leaf))));
+    items.push(MenuItem::Entry(MenuEntry {
+        label: "Reset to project color".into(),
+        shortcut: None,
+        accent: false,
+        action: MenuAction::SetPaneColor { leaf, color: None },
+        swatch: None,
+        checked: current.is_none(),
+    }));
+    Some(MenuItem::Submenu { label: "Tab color".into(), items })
 }
 
 /// "New Claude here with ▸" and the config dirs, when there are two or more.
@@ -335,6 +386,7 @@ pub fn tab_menu(
     if let Some((leaf, unread)) = mark {
         items.push(read_mark_item(leaf, unread));
     }
+    items.extend(pane_color_menu(context));
     items.push(MenuItem::Separator);
     items.extend(folder_items(dir, vscode, host));
     items.push(MenuItem::Separator);
@@ -425,6 +477,7 @@ pub fn row_menu(row: &Row, alone: &dyn Fn(NodeId) -> bool, context: &MenuContext
             if let (Tone::Idle | Tone::Done | Tone::Unread, Some(leaf)) = (tone, leaf) {
                 items.push(read_mark_item(*leaf, *tone != Tone::Idle));
             }
+            items.extend(pane_color_menu(context));
             items.push(entry("Copy session id", MenuAction::Copy(session.id.clone())));
             items.extend(folder_items(&session.cwd, vscode, &session.host));
             if let Some(leaf) = leaf {
@@ -456,6 +509,7 @@ pub fn row_menu(row: &Row, alone: &dyn Fn(NodeId) -> bool, context: &MenuContext
                     }
                 }
             }
+            items.extend(pane_color_menu(context));
             items.push(MenuItem::Separator);
             if let Some(id) = &pane.session {
                 items.push(entry("Copy session id", MenuAction::Copy(id.clone())));
@@ -521,7 +575,7 @@ mod tests {
             .enumerate()
             .map(|(n, name)| (name.to_string(), n == 0, remembered == Some(n)))
             .collect();
-        MenuContext { dirs, favorite: false, project_color: None }
+        MenuContext { dirs, favorite: false, project_color: None, pane_color: None }
     }
 
     fn submenu_labels(items: &[MenuItem]) -> Vec<String> {
@@ -915,7 +969,12 @@ mod tests {
     #[test]
     fn the_dir_submenu_needs_two_dirs_and_a_host_folder() {
         let live = session_row(SessionState::Managed { pane: 1 }, Tone::Idle, Some(4));
-        let one = MenuContext { dirs: vec![("Default".into(), true, false)], favorite: false, project_color: None };
+        let one = MenuContext {
+            dirs: vec![("Default".into(), true, false)],
+            favorite: false,
+            project_color: None,
+            pane_color: None,
+        };
         assert!(submenu_labels(&row_menu(&live, ALONE, &one).unwrap()).is_empty());
         let items = row_menu(&live, ALONE, &two_dirs(None)).unwrap();
         assert_eq!(labels(&items)[..3], ["New Claude here", "New Claude here with ▸", "New terminal here"]);
@@ -1008,6 +1067,60 @@ mod tests {
                 .iter()
                 .any(|i| matches!(i, MenuItem::Submenu { label, .. } if label == "Color"))
         );
+    }
+
+    fn tab_color_submenu(items: &[MenuItem]) -> Option<&[MenuItem]> {
+        items.iter().find_map(|item| match item {
+            MenuItem::Submenu { label, items } if label == "Tab color" => Some(items.as_slice()),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn pane_menus_offer_tab_color() {
+        let teal = Some(Tint::Palette(ProjectColor::Teal));
+        let ctx = MenuContext { pane_color: Some((7, teal)), ..MenuContext::default() };
+        let tab = tab_menu(0, &HostId::local(), Path::new("/r/app"), vec![], &ctx, None, 2);
+        for items in [
+            row_menu(&pane_row(false, false), ALONE, &ctx).unwrap(),
+            row_menu(&pane_row(true, false), ALONE, &ctx).unwrap(),
+            tab,
+        ] {
+            let colors = tab_color_submenu(&items).expect("a Tab color submenu");
+            let swatches: Vec<&MenuEntry> = colors
+                .iter()
+                .filter_map(|i| match i {
+                    MenuItem::Entry(e) if e.swatch.is_some() => Some(e),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(swatches.len(), 8);
+            assert_eq!(swatches.iter().filter(|e| e.checked).count(), 1);
+            assert!(swatches.iter().any(|e| e.checked && e.swatch == Some(ProjectColor::Teal)));
+            assert!(swatches.iter().all(|e| matches!(
+                &e.action,
+                MenuAction::SetPaneColor { leaf: 7, color: Some(Tint::Palette(c)) } if Some(*c) == e.swatch
+            )));
+            assert!(colors.iter().any(|i| matches!(i, MenuItem::Entry(e) if e.label == "Custom color…"
+                && e.action == MenuAction::CustomColor(ColorTarget::Pane(7)))));
+            assert!(colors.iter().any(|i| matches!(i, MenuItem::Entry(e) if e.label == "Reset to project color"
+                && !e.checked && e.action == MenuAction::SetPaneColor { leaf: 7, color: None })));
+        }
+        let none = MenuContext::default();
+        assert!(tab_color_submenu(&row_menu(&pane_row(false, false), ALONE, &none).unwrap()).is_none());
+    }
+
+    #[test]
+    fn project_color_menu_offers_custom() {
+        let ctx = MenuContext { project_color: Some(None), ..MenuContext::default() };
+        let items = project_menu(Path::new("/r/app"), None, &ctx);
+        let Some(MenuItem::Submenu { items: colors, .. }) =
+            items.iter().find(|i| matches!(i, MenuItem::Submenu { label, .. } if label == "Color"))
+        else {
+            panic!("no Color submenu")
+        };
+        assert!(colors.iter().any(|i| matches!(i, MenuItem::Entry(e) if e.label == "Custom color…"
+            && e.action == MenuAction::CustomColor(ColorTarget::Project("/r/app".into())))));
     }
 
     #[test]
