@@ -4,14 +4,16 @@
 use std::collections::HashSet;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use app_core::host_state::{HostDot, hosts_summary};
 use app_core::hosts_fold::HostsFold;
 use app_core::menus::{self, MenuAction, MenuContext};
 use app_core::session_tree::{
-    self, Activation, ActiveInput, Arrivals, GroupEdges, PaneEntry, ProjectOrder, ProjectRoots, Row, RowKey, RowKind,
-    TabEntry, Tone, display_path, session_title,
+    self, Activation, ActiveInput, Arrivals, DragSource, DropAt, GroupEdges, PaneEntry, ProjectItems, ProjectOrder,
+    ProjectRoots, Row, RowKey, RowKind, TabEntry, Tone, display_path, project_items, reorder, session_title,
+    shown_order,
 };
 use app_core::sessions::SessionStore;
 use app_core::sidebar_order::SidebarOrder;
@@ -90,6 +92,8 @@ pub enum SidebarEvent {
     },
     /// A pane of a split tab was dropped on the sidebar: make it a tab of its own.
     PullOut(NodeId),
+    /// The user moved a project or a tab: this is the order to save in the layout.
+    OrderChanged(SidebarOrder),
     /// Open the recent sessions pop-up.
     OpenRecents,
     /// Give keyboard focus back to the pane.
@@ -144,6 +148,8 @@ pub struct SidebarView {
     order: ProjectOrder,
     /// The order the user gave projects and tabs, as saved in the layout.
     saved_order: SidebarOrder,
+    /// The movable items of the listed projects (none while a filter is typed).
+    items: Rc<Vec<ProjectItems>>,
     filter: TextField,
     /// The row being renamed and its text field.
     renaming: Option<(RenameTarget, TextField)>,
@@ -212,6 +218,7 @@ impl SidebarView {
             arrivals: Arrivals::default(),
             order: ProjectOrder::default(),
             saved_order: SidebarOrder::default(),
+            items: Rc::new(Vec::new()),
             filter: TextField::default(),
             renaming: None,
             toggled: HashSet::new(),
@@ -603,6 +610,8 @@ impl SidebarView {
         };
         self.all_rows = all_rows;
         self.rows = rows;
+        // Tabs can only be moved while nothing is filtered away.
+        self.items = Rc::new(if self.filter.text().is_empty() { project_items(&self.rows) } else { Vec::new() });
         // A row that is gone (its pane closed) ends its rename.
         if let Some((target, _)) = &self.renaming
             && !self.rows.iter().any(|row| renames(&row.kind, *target))
@@ -776,7 +785,65 @@ impl SidebarView {
         if before != Some(root) {
             self.order.move_project(root, before);
             self.rebuild(cx);
+            let (projects, leaves) = shown_order(&project_items(&self.all_rows), None);
+            self.record_order(&projects, &leaves, cx);
         }
+    }
+
+    /// Half a row that takes a dragged tab (a pane's row or a split tab's heading) to `at`: it draws a line at its top
+    /// or bottom edge while an item that can go there is over it.
+    fn landing(&self, at: DropAt, top: bool, cx: &mut Context<Self>) -> gpui::Div {
+        let theme = theme(cx).clone();
+        let half = theme.ui(ROW_HEIGHT / 2.);
+        let accent = rgb(theme.tokens.accent);
+        let (pane_items, tab_items) = (self.items.clone(), self.items.clone());
+        let line = move |style: gpui::StyleRefinement| {
+            if top { style.border_t_2().border_color(accent) } else { style.border_b_2().border_color(accent) }
+        };
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            .when(top, |half_row| half_row.top_0())
+            .when(!top, |half_row| half_row.bottom_0())
+            .h(half)
+            .drag_over::<DraggedPane>(move |style, dragged, _, _| {
+                if reorder(&pane_items, DragSource::Pane(dragged.leaf), at).is_some() { line(style) } else { style }
+            })
+            .drag_over::<DraggedTab>(move |style, dragged, _, _| {
+                if reorder(&tab_items, DragSource::Tab(dragged.first), at).is_some() { line(style) } else { style }
+            })
+            .on_drop(cx.listener(move |this, dragged: &DraggedPane, _, cx| {
+                this.drop_item(DragSource::Pane(dragged.leaf), at, cx)
+            }))
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                this.drop_item(DragSource::Tab(dragged.first), at, cx)
+            }))
+    }
+
+    /// A tab was dropped at `at`: move it inside its project and save the new order. A drop that is no move leaves
+    /// the drop to the list (a pane of a split tab becomes a tab of its own).
+    fn drop_item(&mut self, source: DragSource, at: DropAt, cx: &mut Context<Self>) {
+        let Some((project, blocks)) = reorder(&self.items, source, at) else {
+            if let DragSource::Pane(leaf) = source
+                && session_tree::pullable_leaves(&self.panes).contains(&leaf)
+            {
+                cx.emit(SidebarEvent::PullOut(leaf));
+            }
+            return;
+        };
+        let all = project_items(&self.all_rows);
+        let Some(shown) = all.iter().position(|items| items.path == self.items[project].path) else { return };
+        let (projects, leaves) = shown_order(&all, Some((shown, &blocks)));
+        self.record_order(&projects, &leaves, cx);
+    }
+
+    /// Save the order shown now (the user just changed it) and tell the workspace.
+    fn record_order(&mut self, projects: &[PathBuf], leaves: &[NodeId], cx: &mut Context<Self>) {
+        self.saved_order.record(projects, leaves);
+        self.order.seed(&self.saved_order.projects);
+        self.rebuild(cx);
+        cx.emit(SidebarEvent::OrderChanged(self.saved_order.clone()));
     }
 
     /// One list row: the project's grey group border (drawn in segments, one per row) around the row itself, and
@@ -794,6 +861,31 @@ impl SidebarView {
             _ => None,
         };
         let content = self.render_row_content(index, cx);
+        // A dragged tab lands before this item (upper half of its first row) or before the next one (lower half of
+        // its last row); there is no landing outside the item's own project.
+        let place = self.items.iter().enumerate().find_map(|(project, items)| {
+            items.blocks.iter().enumerate().find_map(|(block, item)| {
+                (item.row..=item.last_row).contains(&index).then_some((
+                    project,
+                    block,
+                    item.row == index,
+                    item.last_row == index,
+                    items.blocks.len(),
+                ))
+            })
+        });
+        let landings = place.map(|(project, block, first, last, count)| {
+            let upper = first.then(|| self.landing(DropAt::Before { project, block }, true, cx));
+            let lower = last.then(|| {
+                let at = if block + 1 < count {
+                    DropAt::Before { project, block: block + 1 }
+                } else {
+                    DropAt::End { project }
+                };
+                self.landing(at, false, cx)
+            });
+            (upper, lower)
+        });
         let group_name = format!("row-{index}");
         let marker = div().absolute().left(theme.ui(14.)).right(theme.ui(14.)).h(px(3.)).rounded(px(2.));
         let marker = if edges.first { marker.top(px(0.)) } else { marker.bottom(px(0.)) };
@@ -820,6 +912,7 @@ impl SidebarView {
             // The whole gap between groups is in the heading row, which has no fill.
             .when(edges.first, |row| row.pt(theme.ui(8.)))
             .child(group)
+            .when_some(landings, |row, (upper, lower)| row.children(upper).children(lower))
             .when(target.is_some(), |row| {
                 row.child(
                     marker.group_drag_over::<DraggedProject>(group_name, |style| style.bg(rgb(theme.tokens.accent))),
@@ -1058,16 +1151,21 @@ impl SidebarView {
                         .children(project()),
                 )
             }
-            RowKind::Tab { title: tab_title, panes, index: tab, .. } => base.child(
-                lined(pill(None))
-                    .h(theme.ui(28.))
-                    .child(
-                        self.rename_field(RenameTarget::Tab(*tab), &theme, cx)
-                            .unwrap_or_else(|| title(tab_title.clone()))
-                            .font_weight(FontWeight::SEMIBOLD),
-                    )
-                    .child(aside(format!("{panes} panes"), theme.tokens.muted)),
-            ),
+            RowKind::Tab { title: tab_title, panes, index: tab, first, .. } => base
+                .on_drag(
+                    DraggedTab { first: *first, title: tab_title.clone() },
+                    |dragged: &DraggedTab, _offset, _window, cx: &mut App| cx.new(|_| dragged.clone()),
+                )
+                .child(
+                    lined(pill(None))
+                        .h(theme.ui(28.))
+                        .child(
+                            self.rename_field(RenameTarget::Tab(*tab), &theme, cx)
+                                .unwrap_or_else(|| title(tab_title.clone()))
+                                .font_weight(FontWeight::SEMIBOLD),
+                        )
+                        .child(aside(format!("{panes} panes"), theme.tokens.muted)),
+                ),
             RowKind::Detail { text, .. } => base.child(
                 div()
                     .pl(theme.ui(34.))
@@ -1135,6 +1233,32 @@ fn renames(kind: &RowKind, target: RenameTarget) -> bool {
         (RowKind::Pane { entry, .. }, RenameTarget::Pane(leaf)) => entry.leaf == leaf,
         (RowKind::Tab { index, .. }, RenameTarget::Tab(tab)) => *index == tab,
         _ => false,
+    }
+}
+
+/// A split tab's heading being dragged to a new place inside its project.
+#[derive(Clone)]
+struct DraggedTab {
+    /// The first leaf of the tab's panes, which names the tab among its project's items.
+    first: NodeId,
+    title: String,
+}
+
+impl Render for DraggedTab {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = theme(cx);
+        div()
+            .px(theme.ui(12.))
+            .py(theme.ui(6.))
+            .rounded(px(RADIUS))
+            .border_1()
+            .border_color(rgb(theme.tokens.accent))
+            .bg(rgb(theme.tokens.raised))
+            .text_color(rgb(theme.tokens.text))
+            .text_sm()
+            .font_family(UI_FONT)
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(self.title.clone())
     }
 }
 

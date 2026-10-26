@@ -230,6 +230,10 @@ impl WorkspaceView {
                     cx.notify();
                 }
             }
+            SidebarEvent::OrderChanged(order) => {
+                self.workspace.sidebar_order = order;
+                self.save(cx);
+            }
             SidebarEvent::OpenRecents => self.open_recents(&OpenRecents, window, cx),
             SidebarEvent::Dismiss => self.focus_current(window, cx),
             SidebarEvent::ShowSettings => self.open_settings(&OpenSettings, window, cx),
