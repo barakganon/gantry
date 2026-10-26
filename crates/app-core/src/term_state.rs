@@ -351,6 +351,21 @@ impl TermState {
         Some(((first, 0), (last, self.clamp_to_text(last, cols))))
     }
 
+    /// The prompt line's text up to the cursor, when the cursor is at its end.
+    pub fn prompt_text_at_end(&self) -> Option<String> {
+        let cursor = self.prompt_cursor()?;
+        let ((first, _), end) = self.prompt_line()?;
+        if cursor != end {
+            return None;
+        }
+        let cols = self.term.columns();
+        let row_upto = |row: usize| {
+            let width = if row == cursor.0 { cursor.1 } else { cols };
+            self.row_text(row as u16).chars().chain(std::iter::repeat(' ')).take(width).collect::<String>()
+        };
+        Some((first..=cursor.0).map(row_upto).collect())
+    }
+
     /// The cell one `reach` from `from` (`(row, col)`) on the prompt line, forward or back, kept within it.
     pub fn prompt_step(&self, from: (usize, usize), reach: Reach, forward: bool) -> (usize, usize) {
         let Some((start, end)) = self.prompt_line() else { return from };
@@ -639,6 +654,17 @@ mod tests {
         let mut t = TermState::new(10, 3);
         t.feed(b"x\r\n$ abcdefghij");
         assert_eq!(t.prompt_line(), Some(((1, 0), (2, 2))));
+    }
+
+    #[test]
+    fn the_prompt_text_is_read_only_at_the_line_end() {
+        let mut t = TermState::new(10, 3);
+        t.feed(b"x\r\n> 1. abcdef");
+        assert_eq!(t.prompt_text_at_end().as_deref(), Some("> 1. abcdef"));
+        t.feed(b"\r\n  2. ");
+        assert_eq!(t.prompt_text_at_end().as_deref(), Some("  2. "), "the typed space counts");
+        t.feed(b"ab\x1b[D");
+        assert_eq!(t.prompt_text_at_end(), None);
     }
 
     #[test]

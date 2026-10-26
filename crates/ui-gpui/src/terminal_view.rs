@@ -13,7 +13,7 @@ use app_core::bidi::{RowOrder, logical_hit, to_display};
 use app_core::dialogs::{BarState, BarTone, PaneBar, pane_bar};
 use app_core::host_state::HostCard;
 use app_core::image_paste;
-use app_core::input::{KeyInput, arrow_presses, edit_bytes, encode_key};
+use app_core::input::{KeyInput, ListItem, arrow_presses, edit_bytes, encode_key, list_item};
 use app_core::layout::grid_dims;
 use app_core::menus::{self, MenuAction};
 use app_core::mouse::{self, MouseAction, MouseMods, encode_mouse};
@@ -542,6 +542,17 @@ impl TerminalView {
         Some(bytes)
     }
 
+    /// A newline after a list item on a Claude prompt starts the next item; after an empty one it ends the list.
+    fn continue_list(&self, newline: &KeyInput) -> Option<Vec<u8>> {
+        if !self.launch.is_claude() {
+            return None;
+        }
+        Some(match list_item(&self.term.prompt_text_at_end()?)? {
+            ListItem::Next(marker) => [encode_key(newline, self.term.key_modes())?, marker.into_bytes()].concat(),
+            ListItem::End(length) => vec![0x7f; length],
+        })
+    }
+
     fn send_input(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
         self.jump = None;
         self.prompt_select = None;
@@ -588,6 +599,15 @@ impl TerminalView {
         if plain
             && matches!(input.key.as_str(), "backspace" | "delete")
             && let Some(bytes) = self.delete_prompt_selection()
+        {
+            self.send_input(&bytes, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if input.key == "enter"
+            && (input.shift || input.alt)
+            && !(input.ctrl || input.platform)
+            && let Some(bytes) = self.continue_list(&input)
         {
             self.send_input(&bytes, cx);
             cx.stop_propagation();

@@ -138,6 +138,31 @@ pub fn arrow_presses(count: i32, app_cursor: bool) -> Vec<u8> {
     cursor_key(if count > 0 { 'C' } else { 'D' }, 1, app_cursor).repeat(count.unsigned_abs() as usize)
 }
 
+/// A newline after a list item on the prompt, as in Slack.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ListItem {
+    /// Type this marker on the new line.
+    Next(String),
+    /// The item is empty: this many Backspaces remove its marker and end the list, with no newline.
+    End(usize),
+}
+
+/// The list item `line` (prompt text up to the cursor, past the prompt's `>`) ends with, if it is one:
+/// `1. `/`1) ` count up, `- `, `* ` and `• ` repeat.
+pub fn list_item(line: &str) -> Option<ListItem> {
+    let item = line.trim_start_matches([' ', '>', '❯', '│']);
+    let (marker, rest) = item.split_once(' ')?;
+    let next = match marker {
+        "-" | "*" | "•" => format!("{marker} "),
+        _ => {
+            let number = marker.strip_suffix(['.', ')'])?;
+            let suffix = &marker[number.len()..];
+            format!("{}{suffix} ", number.parse::<u32>().ok()?.checked_add(1)?)
+        }
+    };
+    Some(if rest.trim().is_empty() { ListItem::End(item.chars().count()) } else { ListItem::Next(next) })
+}
+
 fn cursor_key(letter: char, m: u8, app_cursor: bool) -> Vec<u8> {
     if m > 1 {
         format!("\x1b[1;{m}{letter}")
@@ -265,5 +290,18 @@ mod tests {
         assert_eq!(enc("space", "", LEGACY), None);
         assert_eq!(enc("c", "p", LEGACY), None);
         assert_eq!(enc("enter", "p", LEGACY), None);
+    }
+
+    #[test]
+    fn list_items_continue_and_end() {
+        assert_eq!(list_item("> 1. buy milk"), Some(ListItem::Next("2. ".into())));
+        assert_eq!(list_item("  9) ok"), Some(ListItem::Next("10) ".into())));
+        assert_eq!(list_item("❯ - a"), Some(ListItem::Next("- ".into())));
+        assert_eq!(list_item("  • שלום"), Some(ListItem::Next("• ".into())));
+        assert_eq!(list_item("  3. "), Some(ListItem::End(3)));
+        assert_eq!(list_item("> fix 1. bug"), None);
+        assert_eq!(list_item("> 1.5 x"), None);
+        assert_eq!(list_item("> hello"), None);
+        assert_eq!(list_item("> 1."), None);
     }
 }
