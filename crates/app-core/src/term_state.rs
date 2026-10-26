@@ -121,6 +121,8 @@ pub struct TermState {
     clipboard: Arc<Mutex<Vec<String>>>,
     palette: Palette,
     cell_size: (u16, u16),
+    /// Where the last selection started, for Shift-click.
+    anchor: Option<(Point, Side)>,
 }
 
 impl TermState {
@@ -148,6 +150,7 @@ impl TermState {
             clipboard,
             palette: DARK,
             cell_size: (0, 0),
+            anchor: None,
         }
     }
 
@@ -287,7 +290,19 @@ impl TermState {
             _ => SelectionType::Simple,
         };
         let point = self.viewport_point(col, row);
+        self.anchor = Some((point, side(right_half)));
         self.term.selection = Some(Selection::new(kind, point, side(right_half)));
+    }
+
+    /// Shift-click: stretch the selection, or select from where the last one started, to a viewport cell. `false`
+    /// when there is nothing to stretch from.
+    pub fn extend_selection(&mut self, col: u16, row: u16, right_half: bool) -> bool {
+        if self.term.selection.is_none() {
+            let Some((point, side)) = self.anchor else { return false };
+            self.term.selection = Some(Selection::new(SelectionType::Simple, point, side));
+        }
+        self.update_selection(col, row, right_half);
+        true
     }
 
     /// Extend the current selection to a viewport cell.
@@ -686,6 +701,19 @@ mod tests {
         assert_eq!(t.selection_text().as_deref(), Some("teh_bug"));
         t.start_selection_by(6, 0, false, 3);
         assert_eq!(t.selection_text().as_deref().map(str::trim_end), Some("fix teh_bug now"));
+    }
+
+    #[test]
+    fn shift_click_selects_from_the_last_click() {
+        let mut t = TermState::new(20, 2);
+        t.feed(b"copy this text");
+        assert!(!t.extend_selection(8, 0, true), "nothing clicked yet");
+        t.start_selection(5, 0, false);
+        t.clear_selection();
+        assert!(t.extend_selection(8, 0, true));
+        assert_eq!(t.selection_text().as_deref(), Some("this"));
+        assert!(t.extend_selection(13, 0, true), "a selection stretches");
+        assert_eq!(t.selection_text().as_deref(), Some("this text"));
     }
 
     #[test]

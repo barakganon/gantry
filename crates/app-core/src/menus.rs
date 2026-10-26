@@ -115,6 +115,10 @@ pub enum MenuAction {
     LearnWord(String),
     /// Rewrite the prompt selection with Claude.
     Rephrase,
+    /// Copy the terminal selection.
+    CopySelection,
+    /// Paste the clipboard into the terminal.
+    PasteClipboard,
     /// Take over a session running outside Gantry.
     TakeOver {
         /// Session id.
@@ -225,24 +229,27 @@ pub fn together_menu(count: usize) -> Vec<MenuItem> {
     vec![entry(&format!("Open {count} together"), MenuAction::OpenTogether)]
 }
 
-/// The right-click menu of the prompt line: a misspelled word's suggestions and Learn Spelling, then Rephrase when
-/// there is a selection.
-pub fn prompt_menu(misspelled: Option<(&str, &[String])>, rephrase: bool) -> Vec<MenuItem> {
-    let mut items = Vec::new();
+/// The right-click menu of the terminal: a misspelled word's suggestions and Learn Spelling, Copy (with a selection)
+/// and Paste (at a prompt), then Rephrase when there is a selection on the prompt.
+pub fn prompt_menu(misspelled: Option<(&str, &[String])>, copy: bool, paste: bool, rephrase: bool) -> Vec<MenuItem> {
+    let mut groups: Vec<Vec<MenuItem>> = Vec::new();
     if let Some((word, guesses)) = misspelled {
-        items.extend(guesses.iter().take(6).map(|guess| entry(guess, MenuAction::ReplaceWord(guess.clone()))));
-        if !items.is_empty() {
-            items.push(MenuItem::Separator);
-        }
-        items.push(entry("Learn Spelling", MenuAction::LearnWord(word.into())));
+        groups.push(guesses.iter().take(6).map(|guess| entry(guess, MenuAction::ReplaceWord(guess.clone()))).collect());
+        groups.push(vec![entry("Learn Spelling", MenuAction::LearnWord(word.into()))]);
     }
+    let mut edit = Vec::new();
+    if copy {
+        edit.push(entry("Copy", MenuAction::CopySelection));
+    }
+    if paste {
+        edit.push(entry("Paste", MenuAction::PasteClipboard));
+    }
+    groups.push(edit);
     if rephrase {
-        if !items.is_empty() {
-            items.push(MenuItem::Separator);
-        }
-        items.push(entry("Rephrase with Claude", MenuAction::Rephrase));
+        groups.push(vec![entry("Rephrase with Claude", MenuAction::Rephrase)]);
     }
-    items
+    let groups: Vec<_> = groups.into_iter().filter(|group| !group.is_empty()).collect();
+    groups.join(&MenuItem::Separator)
 }
 
 fn entry(label: &str, action: MenuAction) -> MenuItem {
@@ -1160,11 +1167,17 @@ mod tests {
                 .collect()
         };
         let guesses = ["the".to_string(), "ten".to_string()];
-        assert_eq!(labels(prompt_menu(Some(("teh", &guesses)), false)), ["the", "ten", "-", "Learn Spelling"]);
-        assert_eq!(labels(prompt_menu(Some(("qbz", &[])), false)), ["Learn Spelling"]);
-        assert_eq!(labels(prompt_menu(Some(("qbz", &[])), true)), ["Learn Spelling", "-", "Rephrase with Claude"]);
-        assert_eq!(labels(prompt_menu(None, true)), ["Rephrase with Claude"]);
-        assert!(prompt_menu(None, false).is_empty());
+        assert_eq!(
+            labels(prompt_menu(Some(("teh", &guesses)), false, false, false)),
+            ["the", "ten", "-", "Learn Spelling"]
+        );
+        assert_eq!(labels(prompt_menu(Some(("qbz", &[])), false, false, false)), ["Learn Spelling"]);
+        assert_eq!(
+            labels(prompt_menu(Some(("qbz", &[])), true, true, true)),
+            ["Learn Spelling", "-", "Copy", "Paste", "-", "Rephrase with Claude"]
+        );
+        assert_eq!(labels(prompt_menu(None, true, false, false)), ["Copy"]);
+        assert!(prompt_menu(None, false, false, false).is_empty());
     }
 
     #[test]

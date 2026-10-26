@@ -714,7 +714,10 @@ impl TerminalView {
         };
         let spelled: String = text.chars().skip(cols.start).take(cols.len()).collect();
         let guesses = word.as_ref().map(|_| spelling::guesses(&text, cols.clone())).unwrap_or_default();
-        let items = menus::prompt_menu(word.as_ref().map(|_| (spelled.as_str(), guesses.as_slice())), rephrase);
+        let copy = self.term.selection_text().is_some();
+        let paste = input_fate(&self.state) != InputFate::Drop && self.term.prompt_cursor().is_some();
+        let misspelled = word.as_ref().map(|_| (spelled.as_str(), guesses.as_slice()));
+        let items = menus::prompt_menu(misspelled, copy, paste, rephrase);
         if items.is_empty() {
             return false;
         }
@@ -759,6 +762,8 @@ impl TerminalView {
                 self.spell_cache.clear();
             }
             MenuAction::Rephrase => self.rephrase_selection(cx),
+            MenuAction::CopySelection => self.copy(&Copy, window, cx),
+            MenuAction::PasteClipboard => self.paste(&Paste, window, cx),
             _ => {}
         }
         cx.notify();
@@ -847,6 +852,16 @@ impl TerminalView {
         }
         self.drag = Drag::default();
         if event.button != MouseButton::Left {
+            return;
+        }
+        if event.modifiers.shift
+            && !(event.modifiers.alt || event.modifiers.control)
+            && self.term.extend_selection(col, row, right_half)
+        {
+            self.click_cell = None;
+            self.prompt_select = None;
+            self.drag.selection_press();
+            cx.notify();
             return;
         }
         let plain = !(event.modifiers.shift || event.modifiers.alt || event.modifiers.control);
