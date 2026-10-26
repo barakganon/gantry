@@ -14,7 +14,7 @@ const RESTORE: [(bool, &str, &str); 2] = [
     (
         false,
         "Running only",
-        "Running sessions stay as tabs; finished ones are not reopened. The saved layout is kept, so you can switch back.",
+        "Running sessions stay as tabs; finished ones are not reopened. They are not saved either, so switching back to Restore does not bring them back.",
     ),
 ];
 

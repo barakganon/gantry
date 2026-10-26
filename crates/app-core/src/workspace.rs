@@ -563,10 +563,6 @@ pub struct Workspace {
     /// The order the user gave projects and tabs in the sidebar.
     #[serde(default, skip_serializing_if = "SidebarOrder::is_empty")]
     pub sidebar_order: SidebarOrder,
-    /// Finished tabs and leaves that "Running only" dropped at startup; written back into every saved copy
-    /// so that switching to "Restore tabs and panes" brings them back.
-    #[serde(skip)]
-    dropped: Vec<(Tab, Vec<(NodeId, Leaf)>)>,
     /// The tabs shown so far, for Back / Forward; never saved.
     #[serde(skip)]
     history: TabHistory,
@@ -615,10 +611,9 @@ impl Workspace {
         leaf
     }
 
-    /// Every host that has a leaf (live or parked aside at startup) or a daemon instance in this workspace.
+    /// Every host that has a leaf or a daemon instance in this workspace.
     pub fn host_names(&self) -> BTreeSet<HostId> {
-        let parked = self.dropped.iter().flat_map(|(_, leaves)| leaves.iter().map(|(_, leaf)| &leaf.host));
-        self.leaves.values().map(|leaf| &leaf.host).chain(parked).chain(self.instances.keys()).cloned().collect()
+        self.leaves.values().map(|leaf| &leaf.host).chain(self.instances.keys()).cloned().collect()
     }
 
     /// Move `from`'s leaves and its daemon instance to the name `to` (a rename of an SSH host). Refused, changing
@@ -630,8 +625,7 @@ impl Workspace {
         if self.host_names().contains(to) {
             return Err(format!("{} still has panes in the layout", to.name()));
         }
-        let dropped = self.dropped.iter_mut().flat_map(|(_, leaves)| leaves.iter_mut().map(|(_, leaf)| leaf));
-        for leaf in self.leaves.values_mut().chain(dropped).filter(|leaf| leaf.host == *from) {
+        for leaf in self.leaves.values_mut().filter(|leaf| leaf.host == *from) {
             leaf.host = to.clone();
         }
         if let Some(instance) = self.instances.remove(from) {
@@ -655,9 +649,6 @@ impl Workspace {
             if let Some(leaf) = self.close(id) {
                 panes.extend(leaf.pane.map(|pane| PaneKey::new(host.clone(), pane)));
             }
-        }
-        for (_, leaves) in &mut self.dropped {
-            leaves.retain(|(_, leaf)| leaf.host != *host);
         }
         self.instances.remove(host);
         self.host_folders.remove(host);
@@ -769,14 +760,10 @@ impl Workspace {
         }
     }
 
-    /// A copy without the Settings tab, and with the tabs dropped at startup appended, for saving.
+    /// A copy without the Settings tab, for saving.
     pub fn saveable(&self) -> Workspace {
         let mut saved = self.clone();
         saved.close_settings();
-        for (tab, leaves) in std::mem::take(&mut saved.dropped) {
-            saved.tabs.push(tab);
-            saved.leaves.extend(leaves);
-        }
         saved
     }
 
@@ -903,25 +890,6 @@ impl Workspace {
         }
         self.tabs[self.active].focused = src;
         true
-    }
-
-    /// The tabs to keep aside for `dead` leaves: a tab whose leaves are all dead whole, a dead leaf of a tab with live
-    /// ones as a tab of its own.
-    fn park(&self, dead: &[NodeId]) -> Vec<(Tab, Vec<(NodeId, Leaf)>)> {
-        let mut parked = Vec::new();
-        for tab in self.tabs.iter().filter(|tab| !tab.settings) {
-            let leaves = tab.root.leaves();
-            let (gone, kept): (Vec<NodeId>, Vec<NodeId>) = leaves.into_iter().partition(|leaf| dead.contains(leaf));
-            let pair = |id: NodeId| (id, self.leaves[&id].clone());
-            if kept.is_empty() {
-                parked.push((tab.clone(), gone.into_iter().map(pair).collect()));
-            } else {
-                parked.extend(gone.into_iter().map(|id| {
-                    (Tab { root: Node::Leaf(id), focused: id, settings: false, name: None }, vec![pair(id)])
-                }));
-            }
-        }
-        parked
     }
 
     /// The visible tab.
@@ -1249,7 +1217,7 @@ pub fn without_killed_offline(
 /// saved pane and instance until `reconcile` runs for it (and are never dropped, even without `restore_layout`); live panes
 /// missing from the layout become new tabs (most recently focused last, and active); an explicit launch opens a new
 /// focused tab; an empty result stays empty (the GUI shows its empty state). Without `restore_layout`, leaves whose pane is gone are dropped
-/// from the workspace (live panes still reattach) but kept aside for `saveable`; leaves in `keep` (the ones that
+/// from the workspace for good (live panes still reattach); leaves in `keep` (the ones that
 /// were running when an update stopped everything) stay in the workspace as finished leaves instead.
 pub fn restore(
     saved: Option<Workspace>,
@@ -1272,7 +1240,6 @@ pub fn restore(
             .filter(|(id, leaf)| leaf.pane.is_none() && !keep.contains(id) && connected.contains(&leaf.host))
             .map(|(id, _)| *id)
             .collect();
-        workspace.dropped = workspace.park(&dead);
         for leaf in dead {
             workspace.close(leaf);
         }
@@ -2922,7 +2889,7 @@ mod tests {
         let mut saved = workspace_on("i1");
         let a = saved.new_tab(shell("/a"));
         saved.pane_started(a, 1, "/a".into());
-        let b = saved.new_tab(shell("/b"));
+        saved.new_tab(shell("/b"));
         let keep = HashSet::from([a]);
         // A new daemon: every pane id is stale, so `a` is finished too.
         let restored = restore_local(Some(saved.clone()), "i2", &[], &launch(), false, &keep);
@@ -2930,7 +2897,7 @@ mod tests {
         assert_eq!(restored.workspace.finished_leaves(), vec![a]);
         assert!(restored.spawn.is_empty() && restored.workspace.is_consistent());
         let saved_back = restored.workspace.saveable();
-        assert_eq!(saved_back.leaves.keys().copied().collect::<Vec<_>>(), vec![a, b], "the other tab is parked");
+        assert_eq!(saved_back.leaves.keys().copied().collect::<Vec<_>>(), vec![a], "the other tab is gone for good");
         // With the layout on, nothing changes.
         let on = restore_local(Some(saved.clone()), "i2", &[], &launch(), true, &keep);
         let plain = restore_local(Some(saved), "i2", &[], &launch(), true, &HashSet::new());
@@ -2939,7 +2906,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_without_layout_keeps_dead_leaves_for_saving_and_live_launches() {
+    fn restore_without_layout_drops_dead_leaves_for_good_and_keeps_live_launches() {
         let mut saved = workspace_on("i1");
         let a = saved.new_tab(PaneLaunch {
             claude_dir: Some("/w".into()),
@@ -2959,9 +2926,8 @@ mod tests {
         restored.sidebar.width = 300.0;
         let kept = restored.saveable();
         assert!(kept.is_consistent());
-        assert_eq!(kept.leaves.keys().copied().collect::<Vec<_>>(), vec![a, b, c, d]);
-        assert_eq!(kept.tabs.len(), 3, "the live tab, the dead leaf of the mixed tab, the dead split tab");
-        assert_eq!(kept.tabs[2].root.leaves(), vec![c, d]);
+        assert_eq!(kept.leaves.keys().copied().collect::<Vec<_>>(), vec![a]);
+        assert_eq!(kept.tabs.len(), 1, "only the live tab is saved");
         assert_eq!(
             (kept.leaves[&a].launch.claude_dir.clone(), kept.leaves[&a].launch.env.len()),
             (Some("/w".into()), 1)
@@ -2978,9 +2944,8 @@ mod tests {
             true,
             &HashSet::new(),
         );
-        assert_eq!(back.workspace.leaves.len(), 4, "switching back restores the finished leaves");
+        assert_eq!(back.workspace.leaves.len(), 1, "switching back does not restore the finished leaves");
         assert!(!back.workspace.sidebar.visible);
-        assert_eq!(restored.leaves.len(), 1, "the running workspace only has the live leaf");
     }
 
     #[test]
@@ -3214,19 +3179,6 @@ mod tests {
         assert!(ws.rename_host(&dev, &dev).is_ok(), "the same name is a no-op");
         assert_eq!(ws.instances[&dev], "r1");
         assert!(ws.leaves.values().any(|leaf| leaf.host == dev));
-    }
-
-    #[test]
-    fn a_host_only_in_the_parked_leaves_is_listed_and_blocks_a_rename() {
-        let (dev, old) = (HostId::named("dev"), HostId::named("old"));
-        let mut ws = Workspace::default();
-        ws.new_tab_on(shell("/a"), dev.clone());
-        let parked = Leaf { host: old.clone(), ..Leaf::new(shell("/b")) };
-        let tab = Tab { root: Node::Leaf(99), focused: 99, settings: false, name: None };
-        ws.dropped.push((tab, vec![(99, parked)]));
-        assert!(ws.host_names().contains(&old), "parked leaves count");
-        assert!(ws.rename_host(&dev, &old).is_err());
-        assert!(ws.leaves.values().all(|leaf| leaf.host == dev));
     }
 
     fn folder_session(cwd: &str, last_active_ms: u64, cwd_exists: bool) -> SessionInfo {
