@@ -21,6 +21,26 @@ pub fn learn(word: &str) {
     imp::learn(word);
 }
 
+/// Flag `word` again where it is misspelled.
+pub fn unlearn(word: &str) {
+    imp::unlearn(word);
+}
+
+/// The words taught with Learn Spelling (in any app), sorted.
+pub fn learned() -> Vec<String> {
+    let path = std::env::home_dir().map(|home| home.join("Library/Spelling/LocalDictionary"));
+    let text = path.and_then(|path| std::fs::read_to_string(path).ok()).unwrap_or_default();
+    learned_words(&text)
+}
+
+fn learned_words(text: &str) -> Vec<String> {
+    let mut words: Vec<String> =
+        text.lines().map(str::trim).filter(|word| !word.is_empty()).map(str::to_string).collect();
+    words.sort_by_key(|word| word.to_lowercase());
+    words.dedup();
+    words
+}
+
 /// `text` rewritten by Claude with `~/.local/bin/claude-rephrase` (stdin to stdout); `None` when that fails or is
 /// missing. Blocks for a few seconds.
 pub fn rephrase(text: &str) -> Option<String> {
@@ -108,6 +128,10 @@ mod imp {
     pub fn learn(word: &str) {
         NSSpellChecker::sharedSpellChecker().learnWord(&NSString::from_str(word));
     }
+
+    pub fn unlearn(word: &str) {
+        NSSpellChecker::sharedSpellChecker().unlearnWord(&NSString::from_str(word));
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -123,6 +147,8 @@ mod imp {
     }
 
     pub fn learn(_: &str) {}
+
+    pub fn unlearn(_: &str) {}
 }
 
 #[cfg(test)]
@@ -137,6 +163,12 @@ mod tests {
         assert_eq!(utf16_range(text, 2..5), 3..6);
         assert_eq!(char_range(text, 7..10), 6..9, "a word at the end");
         assert_eq!(char_range("שלום wrld", 5..9), 5..9);
+    }
+
+    #[test]
+    fn learned_words_are_one_per_line_sorted() {
+        assert_eq!(learned_words("zed\n\nGantry\nzed\n"), ["Gantry", "zed"]);
+        assert!(learned_words("").is_empty());
     }
 
     #[cfg(target_os = "macos")]

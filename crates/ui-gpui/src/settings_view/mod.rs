@@ -29,6 +29,7 @@ mod alerts;
 mod appearance;
 pub(crate) mod sessions;
 mod shortcuts;
+mod spelling;
 pub(crate) mod ssh_hosts;
 mod terminal;
 mod window;
@@ -54,10 +55,12 @@ pub(crate) enum Section {
     SshHosts,
     /// Start-up behaviour.
     Window,
+    /// Words taught to the spell checker.
+    Spelling,
 }
 
 impl Section {
-    const ALL: [Section; 7] = [
+    const ALL: [Section; 8] = [
         Section::Appearance,
         Section::Terminal,
         Section::Alerts,
@@ -65,6 +68,7 @@ impl Section {
         Section::Sessions,
         Section::SshHosts,
         Section::Window,
+        Section::Spelling,
     ];
 
     fn label(self) -> &'static str {
@@ -76,6 +80,7 @@ impl Section {
             Section::Sessions => "Sessions",
             Section::SshHosts => "SSH hosts",
             Section::Window => "Window",
+            Section::Spelling => "Spelling",
         }
     }
 
@@ -88,6 +93,7 @@ impl Section {
             Section::Sessions => "How new Claude and terminal panes start.",
             Section::SshHosts => "Remote machines that run Gantry over ssh.",
             Section::Window => "How Gantry starts.",
+            Section::Spelling => "Misspelled words on a Claude prompt get a red underline.",
         }
     }
 }
@@ -261,6 +267,8 @@ pub(crate) struct SettingsView {
     edited_targets: std::collections::HashSet<String>,
     /// Why the last edit on the SSH hosts page was refused.
     ssh_message: Option<String>,
+    /// The learned words on the Spelling page, read when it is first shown.
+    learned_words: Option<Vec<String>>,
     _host_statuses: Subscription,
     _check_row: Subscription,
 }
@@ -303,6 +311,7 @@ impl SettingsView {
             confirm_remove: None,
             edited_targets: Default::default(),
             ssh_message: None,
+            learned_words: None,
             _host_statuses: cx.observe_global::<ssh_hosts::HostStatuses>(|_, cx| cx.notify()),
             _check_row: cx.observe_global::<crate::release_check::CheckRow>(|_, cx| cx.notify()),
         }
@@ -813,6 +822,7 @@ impl Render for SettingsView {
             let active = item == section;
             let choose = handler(move |this, _, cx| {
                 this.section = item;
+                this.learned_words = None;
                 this.popover = None;
                 this.recording = None;
                 this.shortcut_message = None;
@@ -906,6 +916,7 @@ impl Render for SettingsView {
             Section::Sessions => self.sessions(&theme, &settings, window, cx),
             Section::SshHosts => self.ssh_hosts_page(&theme, &settings, window, cx),
             Section::Window => self.window_page(&theme, &settings, window, cx),
+            Section::Spelling => self.spelling_page(&theme, &settings, window, cx),
         };
 
         let backdrop =

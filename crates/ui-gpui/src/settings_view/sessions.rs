@@ -283,6 +283,11 @@ impl SettingsView {
         }
         self.editing = None;
         let text = self.edit.text().to_string();
+        if key.0 == spelling::ADD_WORD {
+            self.add_learned_word(&text);
+            cx.notify();
+            return;
+        }
         if text == self.field_text(key, cx.global::<SettingsStore>().settings()) {
             return;
         }
