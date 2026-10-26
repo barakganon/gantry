@@ -282,6 +282,7 @@ mod tests {
         ];
         let mut files = Vec::new();
         rust_files(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"), &mut files);
+        assert!(files.len() > 10 && files.iter().any(|file| file.ends_with("lib.rs")), "the walk found no sources");
         for file in files {
             let text = std::fs::read_to_string(&file).unwrap();
             for needle in needles {

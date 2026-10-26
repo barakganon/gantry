@@ -1162,6 +1162,7 @@ impl Render for TerminalView {
                 this.child(
                     div().absolute().left_0().right_0().bottom_0().p(theme.ui(12.)).child(
                         div()
+                            .occlude()
                             .px(theme.ui(14.))
                             .py(theme.ui(10.))
                             .flex()
