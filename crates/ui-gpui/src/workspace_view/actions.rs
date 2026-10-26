@@ -71,7 +71,8 @@ impl WorkspaceView {
 
     fn cycle(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         let order = self.sidebar.read(cx).leaf_order();
-        self.workspace.cycle_tab_in(&order, delta);
+        let away = self.away_leaves();
+        self.workspace.cycle_tab_in(&order, delta, |leaf| away.contains(&leaf));
         self.focus_current(window, cx);
         self.save(cx);
     }
@@ -86,7 +87,8 @@ impl WorkspaceView {
 
     /// Show the tab `delta` places away in the Back / Forward history (-1 Back, 1 Forward).
     pub(super) fn history(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.workspace.history_step(delta) {
+        let away = self.away_leaves();
+        if self.workspace.history_step(delta, |leaf| away.contains(&leaf)) {
             self.focus_current(window, cx);
             self.save(cx);
         }

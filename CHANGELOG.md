@@ -15,7 +15,11 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Changed
 - **Saved sidebar order** - The order of projects and of the tabs inside them (what you set by dragging) is kept in the layout and restored when Gantry starts.
 - **Leaner sidebar menus** - The tab menu (title-bar chip) no longer offers "New Claude here with". Session and pane rows no longer offer "New Claude here", "New Claude here with" or "New terminal here" (use the project heading, or split the tab), and the project menu no longer has "Pin as favorite" / "Unpin" (favorites are still managed in Settings and the folder launcher).
+- **Notifications on macOS** - Settings > Alerts and the README now say that macOS needs Gantry allowed in System Settings > Notifications.
 - **SSH hosts card** - The automatic collapse above four hosts and the "n of m connected" heading are gone; use the toggle.
+
+### Fixed
+- **Tab switching and SSH hosts** - Ctrl+Tab and Back/Forward no longer stop on tabs of an SSH host that is not connected; they come back once the host connects.
 
 ## [0.11.0] - 2026-10-25
 

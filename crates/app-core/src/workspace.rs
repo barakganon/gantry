@@ -986,9 +986,16 @@ impl Workspace {
         history.at = history.entries.len() - 1;
     }
 
-    /// Show the tab `delta` places away in the history (-1 Back, 1 Forward), skipping tabs that were closed.
-    /// False when there is none.
-    pub fn history_step(&mut self, delta: isize) -> bool {
+    /// Whether tab `index` is hidden: it has leaves and `away` holds for all of them (a tab of an SSH host that is not
+    /// connected has no sidebar row, so tab switching passes it by).
+    fn tab_hidden(&self, index: usize, away: impl Fn(NodeId) -> bool) -> bool {
+        let leaves = self.tabs[index].root.leaves();
+        !self.tabs[index].settings && !leaves.is_empty() && leaves.into_iter().all(away)
+    }
+
+    /// Show the tab `delta` places away in the history (-1 Back, 1 Forward), skipping tabs that were closed and tabs
+    /// `away` hides (their entries stay). False when there is none.
+    pub fn history_step(&mut self, delta: isize, away: impl Fn(NodeId) -> bool + Copy) -> bool {
         let old_at = self.history.at;
         let entries = std::mem::take(&mut self.history.entries);
         let mut kept = Vec::with_capacity(entries.len());
@@ -1002,11 +1009,17 @@ impl Workspace {
             }
         }
         self.history = TabHistory { entries: kept, at };
-        let target = self.history.at as isize + delta;
-        let Some(leaf) = usize::try_from(target).ok().and_then(|i| self.history.entries.get(i)).copied() else {
-            return false;
+        let mut target = self.history.at as isize + delta;
+        let (leaf, index) = loop {
+            let Some(leaf) = usize::try_from(target).ok().and_then(|i| self.history.entries.get(i)).copied() else {
+                return false;
+            };
+            let Some(index) = self.tab_holding(leaf) else { return false };
+            if !self.tab_hidden(index, away) {
+                break (leaf, index);
+            }
+            target += delta;
         };
-        let Some(index) = self.tab_holding(leaf) else { return false };
         self.history.at = target as usize;
         self.active = index;
         self.tabs[index].focused = leaf;
@@ -1015,11 +1028,11 @@ impl Workspace {
 
     /// Show the tab `delta` places away in `leaf_order` (the sidebar's leaves, top to bottom), wrapping around. The
     /// Settings tab comes first (its row is at the top), each tab counts once (at its first listed leaf), and tabs
-    /// with no listed leaf follow in workspace order.
-    pub fn cycle_tab_in(&mut self, leaf_order: &[NodeId], delta: isize) {
+    /// with no listed leaf follow in workspace order. Tabs `away` hides are left out.
+    pub fn cycle_tab_in(&mut self, leaf_order: &[NodeId], delta: isize, away: impl Fn(NodeId) -> bool + Copy) {
         let mut order: Vec<usize> = self.settings_tab().into_iter().collect();
         for index in leaf_order.iter().filter_map(|leaf| self.tab_of(*leaf)).chain(0..self.tabs.len()) {
-            if !order.contains(&index) {
+            if !order.contains(&index) && !self.tab_hidden(index, away) {
                 order.push(index);
             }
         }
@@ -1482,15 +1495,15 @@ mod tests {
         ws.note_visit();
         visit(&mut ws, a);
         visit(&mut ws, c);
-        assert!(ws.history_step(-1));
+        assert!(ws.history_step(-1, |_| false));
         assert_eq!(ws.focused(), Some(a));
         ws.note_visit();
-        assert!(ws.history_step(-1));
+        assert!(ws.history_step(-1, |_| false));
         assert_eq!(ws.focused(), Some(c));
-        assert!(!ws.history_step(-1));
-        assert!(ws.history_step(1) && ws.history_step(1));
+        assert!(!ws.history_step(-1, |_| false));
+        assert!(ws.history_step(1, |_| false) && ws.history_step(1, |_| false));
         assert_eq!(ws.focused(), Some(c));
-        assert!(!ws.history_step(1));
+        assert!(!ws.history_step(1, |_| false));
         let _ = b;
     }
 
@@ -1500,10 +1513,10 @@ mod tests {
         let (a, b, c) = (ws.new_tab(shell("/a")), ws.new_tab(shell("/b")), ws.new_tab(shell("/c")));
         visit(&mut ws, a);
         visit(&mut ws, b);
-        assert!(ws.history_step(-1));
+        assert!(ws.history_step(-1, |_| false));
         visit(&mut ws, c);
-        assert!(!ws.history_step(1));
-        assert!(ws.history_step(-1));
+        assert!(!ws.history_step(1, |_| false));
+        assert!(ws.history_step(-1, |_| false));
         assert_eq!(ws.focused(), Some(a));
     }
 
@@ -1515,7 +1528,7 @@ mod tests {
         visit(&mut ws, b);
         visit(&mut ws, c);
         ws.close(b);
-        assert!(ws.history_step(-1));
+        assert!(ws.history_step(-1, |_| false));
         assert_eq!(ws.focused(), Some(a));
     }
 
@@ -1771,10 +1784,10 @@ mod tests {
         visit(&mut ws, c);
         assert!(ws.move_leaf(b, c, DropZone::Edge(Direction::Right)));
         assert_eq!(ws.tabs.len(), 2);
-        assert!(ws.history_step(-1), "the entry for b now resolves to the tab that holds it");
-        assert!(ws.history_step(-1));
+        assert!(ws.history_step(-1, |_| false), "the entry for b now resolves to the tab that holds it");
+        assert!(ws.history_step(-1, |_| false));
         assert_eq!(ws.focused(), Some(a));
-        assert!(ws.history_step(1));
+        assert!(ws.history_step(1, |_| false));
         assert!(ws.is_consistent());
     }
 
@@ -1885,15 +1898,15 @@ mod tests {
         // The sidebar lists c, a, b.
         let order = [c, a, b];
         ws.active = ws.tab_of(c).unwrap();
-        ws.cycle_tab_in(&order, 1);
+        ws.cycle_tab_in(&order, 1, |_| false);
         assert_eq!(ws.focused(), Some(a));
-        ws.cycle_tab_in(&order, 1);
+        ws.cycle_tab_in(&order, 1, |_| false);
         assert_eq!(ws.focused(), Some(b));
-        ws.cycle_tab_in(&order, 1);
+        ws.cycle_tab_in(&order, 1, |_| false);
         assert_eq!(ws.settings_tab(), Some(ws.active), "wraps to Settings, the top row");
-        ws.cycle_tab_in(&order, 1);
+        ws.cycle_tab_in(&order, 1, |_| false);
         assert_eq!(ws.focused(), Some(c));
-        ws.cycle_tab_in(&order, -1);
+        ws.cycle_tab_in(&order, -1, |_| false);
         assert_eq!(ws.settings_tab(), Some(ws.active));
         assert!(ws.is_consistent());
     }
@@ -1908,12 +1921,56 @@ mod tests {
         // The sidebar lists the split tab's two leaves, then b; c has no row.
         let order = [a, a2, b];
         ws.active = ws.tab_of(a).unwrap();
-        ws.cycle_tab_in(&order, 1);
+        ws.cycle_tab_in(&order, 1, |_| false);
         assert_eq!(ws.focused(), Some(b), "the split tab's second leaf is not a step");
-        ws.cycle_tab_in(&order, 1);
+        ws.cycle_tab_in(&order, 1, |_| false);
         assert_eq!(ws.focused(), Some(c), "a tab with no row comes after the listed ones");
-        ws.cycle_tab_in(&[], 1);
+        ws.cycle_tab_in(&[], 1, |_| false);
         assert_eq!(ws.active, 0, "an empty order falls back to workspace order");
+    }
+
+    #[test]
+    fn cycle_skips_tabs_whose_leaves_are_all_away() {
+        let mut ws = Workspace::default();
+        let a = ws.new_tab(shell("/a"));
+        let gone = ws.new_tab(shell("/gone"));
+        let c = ws.new_tab(shell("/c"));
+        let away = |leaf| leaf == gone;
+        ws.active = ws.tab_of(a).unwrap();
+        ws.cycle_tab_in(&[a, c], 1, away);
+        assert_eq!(ws.focused(), Some(c));
+        ws.cycle_tab_in(&[a, c], 1, away);
+        assert_eq!(ws.focused(), Some(a));
+        ws.cycle_tab_in(&[a, c], -1, away);
+        assert_eq!(ws.focused(), Some(c));
+    }
+
+    #[test]
+    fn cycle_keeps_a_split_tab_with_one_live_leaf() {
+        let mut ws = Workspace::default();
+        let a = ws.new_tab(shell("/a"));
+        let b = ws.new_tab(shell("/b"));
+        let b2 = ws.split(Axis::Horizontal, shell("/b2")).unwrap();
+        let away = |leaf| leaf == b2;
+        ws.active = ws.tab_of(a).unwrap();
+        ws.cycle_tab_in(&[a, b], 1, away);
+        assert_eq!(ws.active, ws.tab_of(b).unwrap());
+    }
+
+    #[test]
+    fn history_skips_away_tabs_and_keeps_their_entries() {
+        let mut ws = Workspace::default();
+        let (a, gone, c) = (ws.new_tab(shell("/a")), ws.new_tab(shell("/gone")), ws.new_tab(shell("/c")));
+        visit(&mut ws, a);
+        visit(&mut ws, gone);
+        visit(&mut ws, c);
+        assert!(ws.history_step(-1, |leaf| leaf == gone));
+        assert_eq!(ws.focused(), Some(a));
+        // Back on the host: the entry is still there.
+        assert!(ws.history_step(1, |_| false));
+        assert_eq!(ws.focused(), Some(gone));
+        // Nothing before `a` and nothing visible to go forward to past `gone` when `c` is away too.
+        assert!(!ws.history_step(1, |leaf| leaf == c));
     }
 
     #[test]
