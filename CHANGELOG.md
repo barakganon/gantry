@@ -9,6 +9,7 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Collapsible SSH hosts** - Click the SSH hosts heading to fold the card into one line; it shows the number of connected hosts and a status dot at the right, so you still see when a host is connected, and folds by itself when the sessions list starts to scroll (open it by hand and it stays open).
 
 ### Changed
+- **Notifications on macOS** - Settings > Alerts and the README now say that macOS needs Gantry allowed in System Settings > Notifications.
 - **SSH hosts card** - The automatic collapse above four hosts and the "n of m connected" heading are gone; use the toggle.
 
 ## [0.11.0] - 2026-10-25

@@ -230,6 +230,16 @@ impl SettingsView {
             after,
             after_reset,
         ));
+        if cfg!(target_os = "macos") {
+            rows.push(stacked_row(
+                theme,
+                None,
+                muted(
+                    theme,
+                    "Notifications need your permission on macOS: allow Gantry in System Settings > Notifications. Gantry is listed there after its first notification.",
+                ),
+            ));
+        }
         group(theme, "Events", Some("Badge, notification and sound for each event."), rows)
     }
 

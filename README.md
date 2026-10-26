@@ -159,6 +159,12 @@ Gantry itself does not read those folders: the shells and `claude` it starts do,
 the app that launched them. Allow it once per folder, or change it later in System Settings > Privacy & Security >
 Files and Folders. Granting Full Disk Access is not needed.
 
+#### Notifications
+
+Gantry's notifications (a session finished or needs input) only show once you allow them: open System Settings >
+Notifications, pick Gantry in the list and turn on Allow Notifications. Gantry is listed there after it has tried to
+send its first notification. If you still see none, check that no Focus mode is silencing them.
+
 ### Windows
 
 Planned for the future.
