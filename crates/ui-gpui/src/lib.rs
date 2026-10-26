@@ -3,6 +3,7 @@
 mod alerts;
 mod askpass_view;
 mod assets;
+mod color_picker_view;
 mod context_menu;
 mod field;
 mod git_chip;

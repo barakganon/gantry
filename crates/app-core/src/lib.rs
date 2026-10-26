@@ -2,6 +2,7 @@
 
 pub mod attention;
 pub mod bidi;
+pub mod color_math;
 pub mod dir_complete;
 pub mod fuzzy;
 pub mod git_diff;
@@ -28,6 +29,7 @@ pub mod session_tree;
 pub mod sessions;
 pub mod settings;
 pub mod shortcuts;
+pub mod sidebar_order;
 pub mod snapshot;
 pub mod split_tree;
 pub mod ssh_config;

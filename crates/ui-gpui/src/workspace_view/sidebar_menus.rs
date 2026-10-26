@@ -69,14 +69,6 @@ impl WorkspaceView {
                 self.remember_pick(&dir, &dir_name, cx);
                 self.open_new(true, dir, None, None, HostId::local(), Some(dir_name));
             }
-            MenuAction::PinFavorite(dir) => SettingsStore::update(cx, |settings| {
-                if !settings.favorites.contains(&dir) {
-                    settings.favorites.push(dir);
-                }
-            }),
-            MenuAction::UnpinFavorite(dir) => {
-                SettingsStore::update(cx, |settings| settings.favorites.retain(|favorite| *favorite != dir))
-            }
             MenuAction::SetProjectColor { root, color } => SettingsStore::update(cx, |settings| match color {
                 Some(color) => {
                     settings.project_colors.folders.insert(root, color);
@@ -85,6 +77,14 @@ impl WorkspaceView {
                     settings.project_colors.folders.remove(&root);
                 }
             }),
+            MenuAction::SetPaneColor { leaf, color } => {
+                if self.workspace.set_leaf_color(leaf, color) {
+                    self.save(cx);
+                    self.sync_panes(cx);
+                    cx.notify();
+                }
+            }
+            MenuAction::CustomColor(target) => self.show_color_picker(target, window, cx),
             MenuAction::RecentsFor(project) => self.show_recents(Some(project), window, cx),
             MenuAction::Continue(leaf) => {
                 self.focus_leaf(leaf, window, cx);
@@ -151,11 +151,11 @@ impl WorkspaceView {
                 .and_then(|id| sessions.get(&leaf.host, id))
                 .and_then(|info| info.container.clone());
             let vscode = menus::vscode_args(&leaf.launch.cwd, place.as_ref(), leaf.launch.container.as_deref());
-            let context = if leaf.launch.container.is_some() || !leaf.host.is_local() {
-                MenuContext::default()
-            } else {
-                MenuContext::for_folder(cx.global::<SettingsStore>().settings(), &leaf.launch.cwd)
-            };
+            let mut context = MenuContext::default();
+            // A split tab's heading would color whichever pane has focus; its panes' own rows have the menu.
+            if tab.root.leaves().len() == 1 {
+                context.pane_color = Some((tab.focused, leaf.color));
+            }
             let idle = leaf.session.as_deref().and_then(|id| sessions.get(&leaf.host, id)).is_some_and(|info| {
                 matches!(info.state, SessionState::Managed { .. })
                     && status_tone(info.status.as_ref(), Unseen::No) == Tone::Idle
@@ -220,6 +220,10 @@ impl WorkspaceView {
                     self.save(cx);
                     cx.notify();
                 }
+            }
+            SidebarEvent::OrderChanged(order) => {
+                self.workspace.sidebar_order = order;
+                self.save(cx);
             }
             SidebarEvent::OpenRecents => self.open_recents(&OpenRecents, window, cx),
             SidebarEvent::Dismiss => self.focus_current(window, cx),

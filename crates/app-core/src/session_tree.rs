@@ -8,7 +8,9 @@ use protocol::host::{HostId, PaneKey, project_key, split_project_key};
 use protocol::message::{SessionInfo, SessionState, SessionStatus};
 
 use crate::fuzzy::Fuzzy;
+use crate::sidebar_order::SidebarOrder;
 use crate::split_tree::NodeId;
+use crate::theme_colors::Tint;
 
 /// How a session's row is colored: what it needs from the user, most urgent first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -52,6 +54,8 @@ pub struct PaneEntry {
     pub alone: bool,
     /// Host folder of the dev container it runs in.
     pub container: Option<PathBuf>,
+    /// The color the user gave the pane.
+    pub color: Option<Tint>,
 }
 
 /// What keeps an Active entry's place in the list: its leaf, or (outside Gantry) its session.
@@ -89,15 +93,36 @@ impl Arrivals {
     }
 }
 
-/// The sidebar's project order for this run: activity order at first, then stable; new projects go on top; the
-/// user can drag one. Never saved.
+/// The sidebar's project order: the saved one if there is one, else activity order at first; then stable; new
+/// projects go on top; the user can drag one.
 #[derive(Debug, Default)]
 pub struct ProjectOrder {
     order: Vec<PathBuf>,
     started: bool,
+    /// Projects from the saved order: kept even while not listed (an SSH host that is away).
+    kept: HashSet<PathBuf>,
 }
 
 impl ProjectOrder {
+    /// Start from the saved order `saved` (top to bottom), which also keeps projects that are not listed for now.
+    pub fn seed(&mut self, saved: &[PathBuf]) {
+        self.order = saved.to_vec();
+        self.kept = saved.iter().cloned().collect();
+        self.started = true;
+    }
+
+    /// The order to save: every project in its place, but only those in `shown` and those of SSH hosts (which may only
+    /// be away); a local project that is gone for good is forgotten.
+    pub fn to_save(&self, shown: &[PathBuf]) -> Vec<PathBuf> {
+        let ssh = |path: &PathBuf| path.to_string_lossy().starts_with("ssh://");
+        self.order.iter().filter(|path| shown.contains(path) || ssh(path)).cloned().collect()
+    }
+
+    /// The projects in order, top to bottom (including kept ones that are not listed).
+    pub fn projects(&self) -> &[PathBuf] {
+        &self.order
+    }
+
     /// Fold in the projects listed now, latest activity first. The first call without a filter takes that order. Later calls put
     /// unknown projects on top (in the given order) and forget projects no longer listed. While `filtering`, only
     /// add, never forget.
@@ -111,7 +136,7 @@ impl ProjectOrder {
             return;
         }
         if !filtering {
-            self.order.retain(|known| by_activity.contains(known));
+            self.order.retain(|known| by_activity.contains(known) || self.kept.contains(known));
         }
         let new: Vec<PathBuf> = by_activity.iter().filter(|path| !self.order.contains(path)).cloned().collect();
         self.order.splice(0..0, new);
@@ -167,6 +192,8 @@ pub struct ActiveInput<'a> {
     pub tabs: &'a [TabEntry],
     /// The project a directory belongs to (see [`project_root`]).
     pub project_of: &'a dyn Fn(&HostId, &Path) -> PathBuf,
+    /// The order the user gave the tabs inside their projects.
+    pub saved_order: &'a SidebarOrder,
     /// Current time, ms since the Unix epoch.
     pub now_ms: u64,
 }
@@ -224,6 +251,124 @@ pub struct GroupEdges {
     pub first: bool,
     /// The row is the group's last row.
     pub last: bool,
+}
+
+/// One item a project lists that the user can move: a pane of its own, or a split tab with its panes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemBlock {
+    /// Index of its first row (the pane's row, or the split tab's heading).
+    pub row: usize,
+    /// Index of its last row.
+    pub last_row: usize,
+    /// Its panes' leaves, in screen order.
+    pub leaves: Vec<NodeId>,
+    /// A split tab.
+    pub group: bool,
+}
+
+/// The movable items of one project, top to bottom.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectItems {
+    /// The project's key.
+    pub path: PathBuf,
+    /// Its items.
+    pub blocks: Vec<ItemBlock>,
+}
+
+/// What is picked up to reorder: a pane's own row, or a split tab's heading (by the first leaf of its panes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DragSource {
+    /// A pane that is a tab of its own.
+    Pane(NodeId),
+    /// A split tab.
+    Tab(NodeId),
+}
+
+/// Where a dragged item is dropped: before an item of a project (by index in [`ProjectItems::blocks`]), or after its
+/// last item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropAt {
+    /// Before block `block` of project `project`.
+    Before {
+        /// Index in the list of projects.
+        project: usize,
+        /// Index in the project's blocks.
+        block: usize,
+    },
+    /// After the last block of project `project`.
+    End {
+        /// Index in the list of projects.
+        project: usize,
+    },
+}
+
+/// The projects of `rows` with their movable items. Outside sessions have no leaf and are not items.
+pub fn project_items(rows: &[Row]) -> Vec<ProjectItems> {
+    let mut projects: Vec<ProjectItems> = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        let leaf = match &row.kind {
+            RowKind::Session { leaf, .. } => *leaf,
+            RowKind::Pane { entry, .. } => Some(entry.leaf),
+            _ => None,
+        };
+        match &row.kind {
+            RowKind::Project { path, .. } => projects.push(ProjectItems { path: path.clone(), blocks: Vec::new() }),
+            RowKind::Tab { .. } => {
+                if let Some(project) = projects.last_mut() {
+                    project.blocks.push(ItemBlock { row: index, last_row: index, leaves: Vec::new(), group: true });
+                }
+            }
+            _ => {
+                let (Some(leaf), Some(project)) = (leaf, projects.last_mut()) else { continue };
+                if row.in_tab {
+                    if let Some(block) = project.blocks.last_mut() {
+                        block.leaves.push(leaf);
+                        block.last_row = index;
+                    }
+                } else {
+                    project.blocks.push(ItemBlock { row: index, last_row: index, leaves: vec![leaf], group: false });
+                }
+            }
+        }
+    }
+    projects
+}
+
+/// The new order of the items of the project `source` is dropped in (its index and its blocks of leaves), or `None`
+/// when the drop is no move: another project, a pane under a split heading, an unknown item, or no change.
+pub fn reorder(projects: &[ProjectItems], source: DragSource, at: DropAt) -> Option<(usize, Vec<Vec<NodeId>>)> {
+    let (project, before) = match at {
+        DropAt::Before { project, block } => (project, Some(block)),
+        DropAt::End { project } => (project, None),
+    };
+    let items = projects.get(project)?;
+    let from = items.blocks.iter().position(|block| match source {
+        DragSource::Pane(leaf) => !block.group && block.leaves == [leaf],
+        DragSource::Tab(first) => block.group && block.leaves.first() == Some(&first),
+    })?;
+    let last = items.blocks.len() - 1;
+    match before {
+        Some(block) if block > last || block == from || block == from + 1 => return None,
+        None if from == last => return None,
+        _ => {}
+    }
+    let mut blocks: Vec<Vec<NodeId>> = items.blocks.iter().map(|block| block.leaves.clone()).collect();
+    crate::sidebar_order::move_block(&mut blocks, from, before);
+    Some((project, blocks))
+}
+
+/// The projects and the items' leaves as listed, top to bottom, for [`SidebarOrder::record`]; `moved` replaces the
+/// items of one project (by index) with their new order.
+pub fn shown_order(projects: &[ProjectItems], moved: Option<(usize, &[Vec<NodeId>])>) -> (Vec<PathBuf>, Vec<NodeId>) {
+    let paths = projects.iter().map(|project| project.path.clone()).collect();
+    let mut items = Vec::new();
+    for (index, project) in projects.iter().enumerate() {
+        match moved {
+            Some((at, blocks)) if at == index => items.extend(blocks.iter().flatten().copied()),
+            _ => items.extend(project.blocks.iter().flat_map(|block| block.leaves.iter().copied())),
+        }
+    }
+    (paths, items)
 }
 
 /// The group edges of `rows[index]`.
@@ -592,12 +737,17 @@ pub fn active(input: &ActiveInput<'_>, arrivals: &mut Arrivals, order: &mut Proj
         items_of.entry(group.project.clone()).or_default().push(Item::Group(group));
     }
     let mut projects: Vec<(PathBuf, Vec<Item<'_>>)> = items_of.into_iter().collect();
+    // Tabs the user placed come below the new ones (newest first), in their saved order; outside sessions have no
+    // saved place.
     for (_, items) in &mut projects {
         items.sort_by_key(|item| {
-            std::cmp::Reverse(match item {
-                Item::Single(entry) => arrivals.of(&entry.key),
-                Item::Group(group) => group.place,
-            })
+            let (rank, arrival) = match item {
+                Item::Single(entry) => {
+                    (leaf_of(&entry.key).and_then(|leaf| input.saved_order.rank_of(&[leaf])), arrivals.of(&entry.key))
+                }
+                Item::Group(group) => (input.saved_order.rank_of(&group.tab.leaves), group.place),
+            };
+            (rank.is_some(), rank.unwrap_or(0), std::cmp::Reverse(arrival))
         });
     }
     // Sessions decide; a project with only shells or new leaves counts as now.
@@ -958,6 +1108,7 @@ mod tests {
             offline: false,
             alone: true,
             container: None,
+            color: None,
         }
     }
 
@@ -977,6 +1128,7 @@ mod tests {
         tabs: Vec<TabEntry>,
         arrivals: Arrivals,
         order: ProjectOrder,
+        saved: crate::sidebar_order::SidebarOrder,
     }
 
     impl Fixture {
@@ -997,6 +1149,7 @@ mod tests {
                 marked: &self.marked,
                 tabs: &self.tabs,
                 project_of: &project_of,
+                saved_order: &self.saved,
                 now_ms: NOW,
             };
             active(&input, &mut self.arrivals, &mut self.order)
@@ -1394,6 +1547,120 @@ mod tests {
         let mut sorted = paths(&["/c", "/b", "/a"]);
         sorted.sort_by_key(|p| order.position(p));
         assert_eq!(sorted, paths(&["/a", "/b", "/c"]));
+    }
+
+    #[test]
+    fn saved_order_decides_item_places_inside_a_project() {
+        let mut fixture = Fixture::of(vec![], (1..=3).map(|leaf| shell_pane(leaf, "/r/app")).collect());
+        assert_eq!(keys(&fixture.rows())[1..], [RowKey::Leaf(3), RowKey::Leaf(2), RowKey::Leaf(1)]);
+        fixture.saved.items = vec![1, 3, 2, 77];
+        assert_eq!(keys(&fixture.rows())[1..], [RowKey::Leaf(1), RowKey::Leaf(3), RowKey::Leaf(2)]);
+        fixture.panes.push(shell_pane(4, "/r/app"));
+        assert_eq!(
+            keys(&fixture.rows())[1..],
+            [RowKey::Leaf(4), RowKey::Leaf(1), RowKey::Leaf(3), RowKey::Leaf(2)],
+            "a tab that is not in the saved order is new and goes on top"
+        );
+    }
+
+    #[test]
+    fn a_split_tab_is_ranked_by_its_best_leaf() {
+        let mut fixture = Fixture::of(vec![], (1..=3).map(|leaf| shell_pane(leaf, "/r/app")).collect());
+        fixture.tabs = vec![tab(0, 2, &[2, 3])];
+        assert_eq!(keys(&fixture.rows())[1], RowKey::Tab(2), "newest first without a saved order");
+        fixture.saved.items = vec![1, 3];
+        let rows = keys(&fixture.rows());
+        assert_eq!(rows[1], RowKey::Leaf(1));
+        assert_eq!(rows[2], RowKey::Tab(2));
+    }
+
+    /// Project 0 of `rows` as (kind, leaves) per block, for short assertions.
+    fn blocks_of(projects: &[ProjectItems], project: usize) -> Vec<(bool, Vec<NodeId>)> {
+        projects[project].blocks.iter().map(|block| (block.group, block.leaves.clone())).collect()
+    }
+
+    fn app_fixture() -> Fixture {
+        // Display order in /r/app: tab [4, 5], then leaf 3, leaf 2, leaf 1; /r/web has leaf 6.
+        let mut panes: Vec<PaneEntry> = (1..=5).map(|leaf| shell_pane(leaf, "/r/app")).collect();
+        panes.push(shell_pane(6, "/r/web"));
+        let mut fixture = Fixture::of(vec![], panes);
+        fixture.tabs = vec![tab(0, 4, &[4, 5])];
+        fixture
+    }
+
+    #[test]
+    fn project_items_group_a_split_tab_with_its_panes() {
+        let rows = app_fixture().rows();
+        let projects = project_items(&rows);
+        assert_eq!(projects.iter().map(|p| p.path.clone()).collect::<Vec<_>>(), paths(&["/r/app", "/r/web"]));
+        assert_eq!(
+            blocks_of(&projects, 0),
+            vec![(true, vec![4, 5]), (false, vec![3]), (false, vec![2]), (false, vec![1])]
+        );
+        assert_eq!(blocks_of(&projects, 1), vec![(false, vec![6])]);
+        let tab = &projects[0].blocks[0];
+        assert_eq!((tab.row, tab.last_row), (1, 3), "the heading and its two panes");
+    }
+
+    #[test]
+    fn reorder_moves_a_pane_or_a_split_tab_inside_its_project() {
+        let rows = app_fixture().rows();
+        let projects = project_items(&rows);
+        let before = |block| DropAt::Before { project: 0, block };
+        let (project, blocks) = reorder(&projects, DragSource::Pane(1), before(1)).unwrap();
+        assert_eq!((project, blocks), (0, vec![vec![4, 5], vec![1], vec![3], vec![2]]));
+        let (_, blocks) = reorder(&projects, DragSource::Pane(3), DropAt::End { project: 0 }).unwrap();
+        assert_eq!(blocks, vec![vec![4, 5], vec![2], vec![1], vec![3]]);
+        let (_, blocks) = reorder(&projects, DragSource::Tab(4), DropAt::End { project: 0 }).unwrap();
+        assert_eq!(blocks, vec![vec![3], vec![2], vec![1], vec![4, 5]]);
+    }
+
+    #[test]
+    fn reorder_refuses_what_is_not_a_move_inside_one_project() {
+        let rows = app_fixture().rows();
+        let projects = project_items(&rows);
+        let at = |block| DropAt::Before { project: 0, block };
+        assert_eq!(
+            reorder(&projects, DragSource::Pane(4), at(2)),
+            None,
+            "a pane under a split heading is not a source"
+        );
+        assert_eq!(reorder(&projects, DragSource::Pane(6), at(1)), None, "another project's tab");
+        assert_eq!(reorder(&projects, DragSource::Pane(3), at(1)), None, "before itself");
+        assert_eq!(reorder(&projects, DragSource::Pane(3), at(2)), None, "before the one that follows it already");
+        assert_eq!(reorder(&projects, DragSource::Pane(1), DropAt::End { project: 0 }), None, "already last");
+        assert_eq!(reorder(&projects, DragSource::Pane(3), at(9)), None, "no such place");
+        assert_eq!(reorder(&projects, DragSource::Tab(3), at(2)), None, "a single pane is not a split tab");
+        assert_eq!(reorder(&projects, DragSource::Pane(99), at(1)), None, "an unknown leaf");
+    }
+
+    #[test]
+    fn shown_order_lists_projects_and_tabs_top_to_bottom_with_a_moved_project() {
+        let rows = app_fixture().rows();
+        let projects = project_items(&rows);
+        assert_eq!(shown_order(&projects, None), (paths(&["/r/app", "/r/web"]), vec![4, 5, 3, 2, 1, 6]));
+        let moved = vec![vec![1], vec![4, 5]];
+        let (shown_projects, items) = shown_order(&projects, Some((0, &moved)));
+        assert_eq!(shown_projects, paths(&["/r/app", "/r/web"]));
+        assert_eq!(items, vec![1, 4, 5, 6]);
+    }
+
+    #[test]
+    fn the_order_to_save_keeps_places_of_ssh_projects_that_are_away_and_drops_other_unlisted_ones() {
+        let mut order = ProjectOrder::default();
+        order.seed(&paths(&["ssh://box/app", "/a", "/gone", "/b"]));
+        order.update(&paths(&["/b", "/a"]), false);
+        assert_eq!(order.to_save(&paths(&["/a", "/b"])), paths(&["ssh://box/app", "/a", "/b"]));
+    }
+
+    #[test]
+    fn seeded_project_order_keeps_projects_that_are_not_listed() {
+        let mut order = ProjectOrder::default();
+        order.seed(&paths(&["/a", "/b", "/c"]));
+        order.update(&paths(&["/b", "/a"]), false);
+        assert_eq!(order.projects(), paths(&["/a", "/b", "/c"]).as_slice());
+        order.update(&paths(&["/b", "/a", "/d"]), false);
+        assert_eq!(order.projects(), paths(&["/d", "/a", "/b", "/c"]).as_slice(), "a new project goes on top");
     }
 
     #[test]

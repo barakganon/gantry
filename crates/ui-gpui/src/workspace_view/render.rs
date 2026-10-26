@@ -11,6 +11,7 @@ use gpui::{
 use app_core::menus::MenuAction;
 use app_core::session_tree::Tone;
 
+use crate::color_picker_view::ColorPickerEvent;
 use crate::context_menu::{self};
 use crate::settings_store::SettingsStore;
 use crate::theme::{FadeKind, RADIUS, RADIUS_SMALL, Theme, UI_FONT, fade_in, theme};
@@ -256,6 +257,35 @@ impl Render for WorkspaceView {
                             ))
                         })
                         .child(view),
+                )
+            })
+            .when_some(self.color_picker.as_ref().map(|(view, _)| view.clone()), |root, view| {
+                let dismiss = view.clone();
+                root.child(
+                    div()
+                        .id("color-picker-overlay")
+                        .occlude()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .size_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .p(theme.ui(16.))
+                        .when(!fade, |overlay| overlay.bg(scrim))
+                        .when(fade, |overlay| {
+                            overlay.child(fade_in(
+                                div().absolute().top_0().left_0().size_full().bg(scrim),
+                                "fade-color-picker-scrim",
+                                FadeKind::Scrim,
+                                true,
+                            ))
+                        })
+                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            dismiss.update(cx, |_, cx| cx.emit(ColorPickerEvent::Cancelled));
+                        })
+                        .child(div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(view)),
                 )
             })
             .when_some(self.update_card.as_ref().zip(self.update_notice()), |root, (focus, update)| {

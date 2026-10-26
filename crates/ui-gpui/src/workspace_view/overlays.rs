@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use app_core::host_state::HostState;
 use app_core::launcher::{self, OpenFolder, OpenPane, RecentFolder};
+use app_core::menus::ColorTarget;
 use app_core::recents;
 use app_core::release::CheckStatus;
 use app_core::search_merge::{self};
@@ -18,6 +19,7 @@ use protocol::message::{PaletteColors, SessionInfo};
 use app_core::session_tree::status_tone;
 
 use crate::askpass_view::{AskpassEvent, AskpassView};
+use crate::color_picker_view::{ColorPickerEvent, ColorPickerView};
 use crate::launcher_view::{LauncherEvent, LauncherHost, LauncherView};
 use crate::recents_view::{RecentsEvent, RecentsView, SEARCH_LIMIT};
 use crate::release_check::CheckRow;
@@ -205,6 +207,42 @@ impl WorkspaceView {
             cx.subscribe_in(&view, window, |this, _, _: &AskpassEvent, window, cx| this.show_next_question(window, cx));
         view.focus_handle(cx).focus(window, cx);
         self.askpass = Some((view, subscription));
+        cx.notify();
+    }
+
+    /// Open the custom color picker for `target`, starting at its current color.
+    pub(super) fn show_color_picker(&mut self, target: ColorTarget, window: &mut Window, cx: &mut Context<Self>) {
+        let theme = theme(cx);
+        let current = match &target {
+            ColorTarget::Pane(leaf) => self
+                .workspace
+                .leaf_color(*leaf)
+                .map(|tint| tint.value(theme.preset))
+                .or_else(|| self.leaf_project_color(*leaf, cx)),
+            ColorTarget::Project(root) => theme.project(root),
+        };
+        let initial = current.unwrap_or(theme.tokens.accent);
+        let view = cx.new(|cx| ColorPickerView::new(target, initial, cx));
+        let subscription = cx.subscribe_in(&view, window, |this, _, event: &ColorPickerEvent, window, cx| {
+            if let ColorPickerEvent::Picked(target, tint) = event {
+                match target {
+                    ColorTarget::Pane(leaf) => {
+                        if this.workspace.set_leaf_color(*leaf, Some(*tint)) {
+                            this.save(cx);
+                            this.sync_panes(cx);
+                        }
+                    }
+                    ColorTarget::Project(root) => SettingsStore::update(cx, |settings| {
+                        settings.project_colors.folders.insert(root.clone(), *tint);
+                    }),
+                }
+            }
+            this.color_picker = None;
+            this.focus_current(window, cx);
+            cx.notify();
+        });
+        view.focus_handle(cx).focus(window, cx);
+        self.color_picker = Some((view, subscription));
         cx.notify();
     }
 

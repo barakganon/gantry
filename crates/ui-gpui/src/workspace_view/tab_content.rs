@@ -24,8 +24,8 @@ use crate::launcher_view::{FolderRow, star};
 use crate::pane_drag::DraggedPane;
 use crate::settings_store::SettingsStore;
 use crate::theme::{
-    RADIUS, RADIUS_LARGE, RADIUS_SMALL, Theme, container_icon, dir_badge, pin_icon, side_line, ssh_icon, sweeping,
-    theme, working_sweep,
+    RADIUS, RADIUS_LARGE, RADIUS_SMALL, Theme, container_icon, dir_badge, pane_marker, pin_icon, side_line, ssh_icon,
+    sweeping, theme, working_sweep,
 };
 
 impl WorkspaceView {
@@ -367,6 +367,7 @@ impl WorkspaceView {
                 let host = self.workspace.leaves.get(&leaf).and_then(|leaf| leaf.host.remote_name().map(String::from));
                 let dir = self.leaf_dir_badge(leaf, cx);
                 let project = self.leaf_project_color(leaf, cx);
+                let marker = self.workspace.leaf_color(leaf).map(|tint| tint.value(theme.preset));
                 let git_chip = self.git_chip_of(leaf, ("git-chip-pane", index), &theme, cx);
                 let folder = self
                     .workspace
@@ -434,7 +435,7 @@ impl WorkspaceView {
                                         .when(multiple, |pane| {
                                             pane.child(pane_header(
                                                 index, leaf, title, status, unseen, offline, animate, container, host,
-                                                dir, folder, project, git_chip, &theme,
+                                                dir, folder, project, marker, git_chip, &theme,
                                             ))
                                         })
                                         .when_some(last_prompt, |pane, text| {
@@ -552,6 +553,7 @@ fn pane_header(
     dir: Option<DirBadge>,
     folder: Option<String>,
     project: Option<u32>,
+    marker: Option<u32>,
     git_chip: Option<gpui::Stateful<Div>>,
     theme: &Theme,
 ) -> impl IntoElement {
@@ -578,8 +580,8 @@ fn pane_header(
         .flex_none()
         .h(theme.ui(28.))
         .mb(theme.ui(4.))
-        .when(project.is_some(), |header| header.pl(theme.ui(16.)))
-        .when(project.is_none(), |header| header.pl_3())
+        .when(project.is_some(), |header| header.pl(theme.ui(if marker.is_some() { 28. } else { 16. })))
+        .when(project.is_none(), |header| header.pl(theme.ui(if marker.is_some() { 18. } else { 12. })))
         .pr_3()
         .flex()
         .items_center()
@@ -591,6 +593,9 @@ fn pane_header(
         .text_color(rgb(colors.map_or(theme.tokens.text, |colors| colors.ink)))
         .when(sweep, |header| header.child(working_sweep(("sweep-pane", index), px(RADIUS_SMALL), theme)))
         .when_some(project, |header, color| header.child(side_line(color, theme)))
+        .when_some(marker, |header, color| {
+            header.child(pane_marker(color, if project.is_some() { 12. } else { 4. }, theme))
+        })
         .children(pin)
         .child(div().flex_1().min_w_0().truncate().child(title))
         .children(git_chip)

@@ -12,8 +12,9 @@ use crate::attention::most_urgent;
 use crate::launcher::HostFolder;
 use crate::sessions::SessionStore;
 use crate::settings::{Settings, ShellSettings, expand_home};
+use crate::sidebar_order::SidebarOrder;
 use crate::split_tree::{Axis, Direction, DropZone, Node, NodeId};
-use crate::theme_colors::ProjectColor;
+use crate::theme_colors::{ProjectColor, Tint};
 
 /// Program name of Claude Code.
 pub const CLAUDE: &str = "claude";
@@ -386,13 +387,22 @@ pub struct Leaf {
     /// Name the user gave a shell pane; `None` = the pane's own title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The color the user gave the pane; `None` = only the project color. A value that does not parse loads as `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient_tint")]
+    pub color: Option<Tint>,
+}
+
+/// Reads a saved pane color, treating anything unreadable as none.
+fn lenient_tint<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Tint>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.as_ref().and_then(|value| value.as_str()).and_then(Tint::parse))
 }
 
 impl Leaf {
     /// A leaf about to run `launch`.
     pub fn new(launch: PaneLaunch) -> Leaf {
         let session = launch.session().map(String::from);
-        Leaf { pane: None, host: HostId::local(), launch, session, name: None }
+        Leaf { pane: None, host: HostId::local(), launch, session, name: None, color: None }
     }
 
     /// The pane's host and id, while it runs.
@@ -550,6 +560,9 @@ pub struct Workspace {
     /// Each SSH host's most recently used folders, kept while the host is away so the launcher can still list them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub host_folders: BTreeMap<HostId, Vec<HostFolder>>,
+    /// The order the user gave projects and tabs in the sidebar.
+    #[serde(default, skip_serializing_if = "SidebarOrder::is_empty")]
+    pub sidebar_order: SidebarOrder,
     /// Finished tabs and leaves that "Running only" dropped at startup; written back into every saved copy
     /// so that switching to "Restore tabs and panes" brings them back.
     #[serde(skip)]
@@ -689,6 +702,22 @@ impl Workspace {
             }
             _ => false,
         }
+    }
+
+    /// Give a pane a color of its own (`None` clears it). False, changing nothing, for a missing leaf.
+    pub fn set_leaf_color(&mut self, leaf: NodeId, color: Option<Tint>) -> bool {
+        match self.leaves.get_mut(&leaf) {
+            Some(found) => {
+                found.color = color;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The color the user gave a pane, if any.
+    pub fn leaf_color(&self, leaf: NodeId) -> Option<Tint> {
+        self.leaves.get(&leaf)?.color
     }
 
     /// Name a tab (trimmed; empty clears it). False, changing nothing, for a missing tab or the Settings tab.
@@ -1779,6 +1808,23 @@ mod tests {
     }
 
     #[test]
+    fn leaf_color_survives_moves() {
+        use crate::theme_colors::Tint;
+        let mut ws = Workspace::default();
+        let [a, b, c] = tab_of_panes(&mut ws, 3)[..] else { panic!("three panes") };
+        assert_eq!(ws.leaf_color(b), None);
+        assert!(ws.set_leaf_color(b, Some(Tint::Custom(0xf08a4b))));
+        assert!(ws.pull_out(b));
+        assert_eq!(ws.leaf_color(b), Some(Tint::Custom(0xf08a4b)));
+        assert!(ws.move_leaf(b, c, DropZone::Edge(Direction::Right)));
+        assert_eq!(ws.leaf_color(b), Some(Tint::Custom(0xf08a4b)));
+        assert!(ws.set_leaf_color(b, None));
+        assert_eq!(ws.leaf_color(b), None);
+        assert!(!ws.set_leaf_color(9999, None));
+        let _ = a;
+    }
+
+    #[test]
     fn pulling_out_the_focused_pane_moves_focus_to_its_sibling() {
         let mut ws = Workspace::default();
         let [a, b] = tab_of_panes(&mut ws, 2)[..] else { panic!("two panes") };
@@ -2149,6 +2195,7 @@ mod tests {
 
     fn claude_leaf(session: Option<&str>) -> Leaf {
         Leaf {
+            color: None,
             pane: None,
             host: HostId::local(),
             launch: PaneLaunch {

@@ -71,6 +71,19 @@ pub(crate) fn side_line(color: u32, theme: &Theme) -> Div {
         .bg(rgb(color))
 }
 
+/// A pane's own color: a 6 px wide rounded bar, 8 px from the top and bottom of the (relatively positioned) row,
+/// header or chip it is a child of, `left` px from its left edge.
+pub(crate) fn pane_marker(color: u32, left: f32, theme: &Theme) -> Div {
+    div()
+        .absolute()
+        .left(theme.ui(left))
+        .top(theme.ui(8.))
+        .bottom(theme.ui(8.))
+        .w(theme.ui(6.))
+        .rounded(px(3.))
+        .bg(rgb(color))
+}
+
 /// The theme global.
 pub(crate) fn theme(cx: &App) -> &Theme {
     cx.global::<Theme>()

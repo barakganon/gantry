@@ -445,6 +445,7 @@ impl WorkspaceView {
                         .tab_of(*id)
                         .is_some_and(|tab| self.workspace.tabs[tab].root.leaves().len() == 1),
                     container: leaf.launch.container.clone(),
+                    color: leaf.color,
                 }
             })
             .collect();
