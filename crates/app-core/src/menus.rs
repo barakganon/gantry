@@ -375,7 +375,6 @@ pub fn tab_menu(
         with_shortcut("Split right", Shortcut::SplitRight, MenuAction::Split { tab, axis: Axis::Horizontal }),
         with_shortcut("Split down", Shortcut::SplitDown, MenuAction::Split { tab, axis: Axis::Vertical }),
     ];
-    items.extend(claude_with_on(dir, context, host));
     if let Some((leaf, unread)) = mark {
         items.push(read_mark_item(leaf, unread));
     }
@@ -935,12 +934,6 @@ mod tests {
         assert_eq!(elsewhere.dirs, [("Personal".to_string(), false, false), ("Work".to_string(), true, false)]);
         // No configured dirs: the implicit Default is not a choice.
         assert!(MenuContext::for_folder(&Settings::default(), Path::new("/r/app")).dirs.is_empty());
-    }
-
-    #[test]
-    fn a_tab_menu_offers_the_choice_after_the_splits() {
-        let items = tab_menu(0, &HostId::local(), Path::new("/r/app"), vec![], &two_dirs(None), None, 1);
-        assert_eq!(labels(&items)[..4], ["Split right", "Split down", "New Claude here with ▸", "│"]);
     }
 
     #[test]

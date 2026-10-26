@@ -151,11 +151,7 @@ impl WorkspaceView {
                 .and_then(|id| sessions.get(&leaf.host, id))
                 .and_then(|info| info.container.clone());
             let vscode = menus::vscode_args(&leaf.launch.cwd, place.as_ref(), leaf.launch.container.as_deref());
-            let mut context = if leaf.launch.container.is_some() || !leaf.host.is_local() {
-                MenuContext::default()
-            } else {
-                MenuContext::for_folder(cx.global::<SettingsStore>().settings(), &leaf.launch.cwd)
-            };
+            let mut context = MenuContext::default();
             // A split tab's heading would color whichever pane has focus; its panes' own rows have the menu.
             if tab.root.leaves().len() == 1 {
                 context.pane_color = Some((tab.focused, leaf.color));
