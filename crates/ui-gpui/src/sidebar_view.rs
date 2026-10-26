@@ -23,15 +23,16 @@ use app_core::theme_colors::ToneColors;
 use gpui::{
     AnyElement, App, Bounds, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, FontWeight, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Point, Render, ScrollStrategy, Stateful, Task,
-    UniformListDecoration, UniformListScrollHandle, Window, div, prelude::*, px, rgb, rgba, uniform_list,
+    UniformListDecoration, UniformListScrollHandle, Window, div, prelude::*, px, rgb, rgba, svg, uniform_list,
 };
 use protocol::host::HostId;
 use protocol::message::SessionInfo;
 
+use crate::assets::{CHEVRON_DOWN_ICON, CHEVRON_RIGHT_ICON, CLOSE_ICON};
 use crate::context_menu::{self, OpenMenu};
 use crate::field;
 use crate::git_scrollbar::Extent;
-use crate::hover_card::{self, HostsCard, HoverCard, Lead, lead};
+use crate::hover_card::{self, HostsCard, HoverCard, Lead, lead, line_width};
 use crate::pane_drag::DraggedPane;
 use crate::settings_store::{SettingsStore, dir_badge_for, shortcut_label};
 use crate::theme::{
@@ -43,6 +44,15 @@ use crate::theme::{
 const ROW_HEIGHT: f32 = 39.0;
 /// Empty space above and below a row's fill inside its slot; two neighbours are twice this far apart.
 const ROW_PAD_Y: f32 = 2.0;
+/// Space left of a project heading's fill, inside the group.
+const HEADING_INSET: f32 = 10.0;
+/// Space left of a session's (or tab's, or pane's) fill, inside the group. Its bar and text sit further in the fill
+/// (`lined`) than the heading's name, so the fill starts 5 px, not 10, right of the heading's.
+const SESSION_INSET: f32 = 15.0;
+/// The same for a row in a split-tab group, which is indented under the split tab's heading.
+const TAB_INSET: f32 = 37.0;
+/// The least width the hairline in a project heading is drawn at.
+const MIN_RULE: f32 = 16.0;
 /// Width of the ring around the selected row.
 const RING: f32 = 2.0;
 /// Empty space between the ring and the selected row's fill.
@@ -851,7 +861,7 @@ impl SidebarView {
 
     /// One list row: the project's grey group border (drawn in segments, one per row) around the row itself, and
     /// where a dragged project heading may land.
-    fn render_row(&self, index: usize, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_row(&self, index: usize, window: &Window, cx: &mut Context<Self>) -> gpui::Div {
         let theme = theme(cx).clone();
         let edges = session_tree::group_edges(&self.rows, index);
         // A dragged project goes before this row's project (at its heading), or after it (at its last row).
@@ -863,7 +873,7 @@ impl SidebarView {
             })),
             _ => None,
         };
-        let content = self.render_row_content(index, cx);
+        let content = self.render_row_content(index, window, cx);
         // A dragged tab lands before this item (upper half of its first row) or before the next one (lower half of
         // its last row); there is no landing outside the item's own project.
         let place = self.items.iter().enumerate().find_map(|(project, items)| {
@@ -929,7 +939,61 @@ impl SidebarView {
             }))
     }
 
-    fn render_row_content(&self, index: usize, cx: &mut Context<Self>) -> Stateful<gpui::Div> {
+    /// The close button of row `index`, in the slot of its right-most mark. It replaces `badge` while the row is
+    /// hovered; a row without a badge opens a slot of its own then. Rows that cannot be closed keep `badge`.
+    fn close_slot(
+        &self,
+        index: usize,
+        badge: Option<gpui::Div>,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        let Some(action) = menus::middle_click(&self.rows[index]) else { return badge };
+        let group = format!("row-{index}");
+        let danger = theme.tokens.danger;
+        let button = div()
+            .id(("close-row", index))
+            .flex_none()
+            .size(theme.ui(20.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.))
+            .cursor_pointer()
+            .hover(|style| style.bg(rgba((danger << 8) | 0x24)))
+            .child(svg().path(CLOSE_ICON).size(theme.ui(14.)).text_color(rgba((danger << 8) | 0xc7)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |_, _: &MouseDownEvent, _, cx| {
+                    cx.emit(SidebarEvent::Menu(action.clone()));
+                    cx.stop_propagation();
+                }),
+            );
+        Some(match badge {
+            Some(badge) => {
+                div().relative().flex_none().child(badge.group_hover(group.clone(), |style| style.opacity(0.))).child(
+                    button
+                        .absolute()
+                        .top(px(-2.))
+                        .left(px(-2.))
+                        .opacity(0.)
+                        .group_hover(group, |style| style.opacity(1.)),
+                )
+            }
+            None => {
+                let (gap, open) = (theme.ui(8.), theme.ui(20.));
+                div()
+                    .flex_none()
+                    .w(px(0.))
+                    .ml(-gap)
+                    .overflow_hidden()
+                    .group_hover(group, move |style| style.w(open).ml(px(0.)))
+                    .child(button)
+            }
+        })
+    }
+
+    fn render_row_content(&self, index: usize, window: &Window, cx: &mut Context<Self>) -> Stateful<gpui::Div> {
         let row = &self.rows[index];
         let key = row.key();
         let menu_key = key.clone();
@@ -940,7 +1004,8 @@ impl SidebarView {
             .flex_1()
             .min_h_0()
             .w_full()
-            .px(theme.ui(10.))
+            .pl(theme.ui(SESSION_INSET))
+            .pr(theme.ui(HEADING_INSET))
             .py(px(ROW_PAD_Y))
             .flex()
             .flex_row()
@@ -1020,19 +1085,19 @@ impl SidebarView {
         let lined = |pill: gpui::Div| match (line, pane_color) {
             (Some(color), marker) => pill
                 .relative()
-                .pl(theme.ui(30.))
-                .child(side_line(color, &theme))
-                .children(marker.map(|marker| pane_marker(marker, 12., &theme))),
-            (None, Some(marker)) => pill.relative().pl(theme.ui(18.)).child(pane_marker(marker, 4., &theme)),
-            (None, None) => pill,
+                .pl(theme.ui(35.))
+                .child(side_line(color, &theme).left(theme.ui(9.)))
+                .children(marker.map(|marker| pane_marker(marker, 17., &theme))),
+            (None, Some(marker)) => pill.relative().pl(theme.ui(23.)).child(pane_marker(marker, 9., &theme)),
+            (None, None) => pill.pl(theme.ui(17.)),
         };
         let title = |text: String| div().flex_1().min_w_0().truncate().child(text);
         let aside =
             |text: String, ink: u32| div().flex_none().text_xs().text_color(rgba((ink << 8) | 0xcc)).child(text);
         let guide = row
             .in_tab
-            .then(|| div().absolute().left(theme.ui(20.)).top_0().bottom_0().w(px(2.)).bg(rgb(theme.tokens.line)));
-        let base = base.when(row.in_tab, |base| base.relative().pl(theme.ui(32.))).children(guide);
+            .then(|| div().absolute().left(theme.ui(30.)).top_0().bottom_0().w(px(2.)).bg(rgb(theme.tokens.line)));
+        let base = base.when(row.in_tab, |base| base.relative().pl(theme.ui(TAB_INSET))).children(guide);
         // A row that stands for a pane of the layout can be picked up and dropped on a pane or on the sidebar.
         let dragged_pane = match &row.kind {
             RowKind::Session { session, leaf: Some(leaf), .. } => {
@@ -1054,28 +1119,65 @@ impl SidebarView {
             RowKind::Project { path, label, expanded } => {
                 let color = theme.project(path);
                 let dragged = DraggedProject { root: path.clone(), label: label.clone() };
-                base.on_drag(dragged, |dragged: &DraggedProject, _offset, _window, cx: &mut App| {
-                    cx.new(|_| dragged.clone())
-                })
-                .child(
-                    pill(None)
-                        .child(div().flex_none().text_color(rgb(theme.tokens.muted)).child(if *expanded {
-                            "▾"
-                        } else {
-                            "▸"
-                        }))
-                        .children(
-                            color.map(|color| div().flex_none().size(theme.ui(8.)).rounded(px(3.)).bg(rgb(color))),
-                        )
-                        .child(
-                            title(label.clone())
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .when_some(color, |title, color| title.text_color(rgb(color))),
-                        ),
-                )
+                // The hairline needs room: with less than `MIN_RULE` left between the name and the dot it is not drawn
+                // and the name takes the space, so no stub is left. The width is the list's of the last frame.
+                let rule = Extent::of(&self.scroll).is_none_or(|extent| {
+                    let name = line_width(window, label, window.rem_size() * 0.875, FontWeight::SEMIBOLD);
+                    let marks = theme.ui(8.) * f32::from(color.is_some()) + theme.ui(14.);
+                    let chrome = theme.ui(12. + 2. + HEADING_INSET * 2. + 8. + 6.) + theme.ui(6.) * 3.;
+                    px(extent.viewport.0) - chrome - marks - name >= theme.ui(MIN_RULE)
+                });
+                // The name starts further left than the sessions' bars, so the heading reads as their parent; the
+                // project dot and the fold chevron sit together at the right, joined to the name by a hairline.
+                base.pl(theme.ui(HEADING_INSET))
+                    .on_drag(dragged, |dragged: &DraggedProject, _offset, _window, cx: &mut App| {
+                        cx.new(|_| dragged.clone())
+                    })
+                    .child(
+                        pill(None)
+                            .pl(theme.ui(8.))
+                            .pr(theme.ui(6.))
+                            .gap(theme.ui(6.))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .when_some(color, |name, color| name.text_color(rgb(color)))
+                                    .when(!rule, |name| name.flex_1())
+                                    .child(label.clone()),
+                            )
+                            // A hairline in the project color joins the name to the dot and the chevron.
+                            .when(rule, |pill| {
+                                pill.child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .h(px(1.))
+                                        .bg(rgba((color.unwrap_or(theme.tokens.muted) << 8) | 0x61)),
+                                )
+                            })
+                            .children(
+                                color.map(|color| div().flex_none().size(theme.ui(8.)).rounded(px(3.)).bg(rgb(color))),
+                            )
+                            .child(
+                                svg()
+                                    .path(if *expanded { CHEVRON_DOWN_ICON } else { CHEVRON_RIGHT_ICON })
+                                    .flex_none()
+                                    .size(theme.ui(14.))
+                                    .text_color(rgb(theme.tokens.muted)),
+                            ),
+                    )
             }
             RowKind::Session { session, tone, note, .. } => {
                 let colors = theme.tone(*tone);
+                let badge = dir_badge_for(
+                    cx.global::<SettingsStore>().settings(),
+                    session.claude_dir.as_deref(),
+                    &session.host,
+                )
+                .map(|badge| dir_badge(&badge, &theme));
+                let close = self.close_slot(index, badge, &theme, cx);
                 let card = HoverCard {
                     title: session_title(session).to_string(),
                     status: Some(note.clone()),
@@ -1101,19 +1203,13 @@ impl SidebarView {
                         )
                         .when(session.container.is_some(), |pill| pill.child(container_icon(colors.ink, &theme)))
                         .when(!session.host.is_local(), |pill| pill.child(ssh_icon(colors.ink, &theme)))
-                        .children(
-                            dir_badge_for(
-                                cx.global::<SettingsStore>().settings(),
-                                session.claude_dir.as_deref(),
-                                &session.host,
-                            )
-                            .map(|badge| dir_badge(&badge, &theme)),
-                        )
+                        .children(close)
                         .children(project()),
                 )
             }
-            RowKind::Pane { entry, tone, note } if !entry.claude => base
-                .tooltip(hover_card::tooltip(HoverCard {
+            RowKind::Pane { entry, tone, note } if !entry.claude => {
+                let close = self.close_slot(index, None, &theme, cx);
+                base.tooltip(hover_card::tooltip(HoverCard {
                     title: entry.title.clone(),
                     status: Some(note.clone()),
                     dir: None,
@@ -1130,10 +1226,13 @@ impl SidebarView {
                                 .unwrap_or_else(|| title(entry.title.clone())),
                         )
                         .when(!entry.host.is_local(), |pill| pill.child(ssh_icon(theme.tokens.muted, &theme)))
-                        .children(project()),
-                ),
+                        .children(project())
+                        .children(close),
+                )
+            }
             RowKind::Pane { entry, tone, note } => {
                 let colors = theme.tone(*tone);
+                let close = self.close_slot(index, None, &theme, cx);
                 let card = HoverCard {
                     title: "New session".into(),
                     status: Some(note.clone()),
@@ -1151,11 +1250,13 @@ impl SidebarView {
                         .children(lead_mark(*tone, &colors, &theme))
                         .child(title("New session".into()))
                         .when(!entry.host.is_local(), |pill| pill.child(ssh_icon(colors.ink, &theme)))
-                        .children(project()),
+                        .children(project())
+                        .children(close),
                 )
             }
-            RowKind::Tab { title: tab_title, panes, index: tab, first, .. } => base
-                .on_drag(
+            RowKind::Tab { title: tab_title, panes, index: tab, first, .. } => {
+                let close = self.close_slot(index, None, &theme, cx);
+                base.on_drag(
                     DraggedTab { first: *first, title: tab_title.clone() },
                     |dragged: &DraggedTab, _offset, _window, cx: &mut App| cx.new(|_| dragged.clone()),
                 )
@@ -1167,11 +1268,13 @@ impl SidebarView {
                                 .unwrap_or_else(|| title(tab_title.clone()))
                                 .font_weight(FontWeight::SEMIBOLD),
                         )
-                        .child(aside(format!("{panes} panes"), theme.tokens.muted)),
-                ),
+                        .child(aside(format!("{panes} panes"), theme.tokens.muted))
+                        .children(close),
+                )
+            }
             RowKind::Detail { text, .. } => base.child(
                 div()
-                    .pl(theme.ui(34.))
+                    .pl(theme.ui(39.))
                     .overflow_hidden()
                     .text_xs()
                     .italic()
@@ -1179,16 +1282,26 @@ impl SidebarView {
                     .child(text.clone()),
             ),
             RowKind::TakeOver { .. } => {
-                base.child(pill(None).pl(theme.ui(32.)).text_color(rgb(theme.tokens.accent)).child("Take over…"))
+                base.child(pill(None).pl(theme.ui(37.)).text_color(rgb(theme.tokens.accent)).child("Take over…"))
             }
         }
     }
 }
 
+/// The space left of the fill of a row, inside its group.
+fn row_inset(row: &Row) -> f32 {
+    match (&row.kind, row.in_tab) {
+        (RowKind::Project { .. }, _) => HEADING_INSET,
+        (_, true) => TAB_INSET,
+        _ => SESSION_INSET,
+    }
+}
+
 /// The selection ring, drawn by the list after all rows (inside its clip) so it passes over the neighbouring rows.
 struct SelectionRing {
-    /// The selected row, its group edges, whether it sits inside a split-tab group and the ring color.
-    row: Option<(usize, GroupEdges, bool, u32)>,
+    /// The selected row, its group edges, the space left of its fill (`HEADING_INSET`, `SESSION_INSET` or `TAB_INSET`)
+    /// and the ring color.
+    row: Option<(usize, GroupEdges, f32, u32)>,
     /// The theme's UI scale, for the paddings the row itself uses.
     theme: Theme,
 }
@@ -1205,7 +1318,7 @@ impl UniformListDecoration for SelectionRing {
         _cx: &mut App,
     ) -> AnyElement {
         let root = div().w(bounds.size.width).h(bounds.size.height);
-        let Some((index, edges, in_tab, color)) = self.row.filter(|(index, ..)| visible_range.contains(index)) else {
+        let Some((index, edges, inset, color)) = self.row.filter(|(index, ..)| visible_range.contains(index)) else {
             return root.into_any_element();
         };
         let theme = &self.theme;
@@ -1215,8 +1328,7 @@ impl UniformListDecoration for SelectionRing {
         let top = item_height * index + if edges.first { theme.ui(8.) + px(1.) } else { px(0.) };
         let bottom = item_height * (index + 1) - if edges.last { px(1.) } else { px(0.) };
         let side = theme.ui(6.) + px(1.) + theme.ui(10.) - out;
-        // A row in a split-tab group has `pl(32)` instead of the usual 10 (see `render_row_content`).
-        let left = if in_tab { theme.ui(6.) + px(1.) + theme.ui(32.) - out } else { side };
+        let left = theme.ui(6.) + px(1.) + theme.ui(inset) - out;
         let ring = div()
             .absolute()
             .left(left)
@@ -1508,14 +1620,14 @@ impl Render for SidebarView {
                         uniform_list(
                             "session-rows",
                             self.rows.len(),
-                            cx.processor(|this, range: Range<usize>, _window, cx| {
-                                range.map(|index| this.render_row(index, cx)).collect::<Vec<_>>()
+                            cx.processor(|this, range: Range<usize>, window, cx| {
+                                range.map(|index| this.render_row(index, window, cx)).collect::<Vec<_>>()
                             }),
                         )
                         .with_decoration(SelectionRing {
                             row: self.selected_index().map(|index| {
                                 let edges = session_tree::group_edges(&self.rows, index);
-                                (index, edges, self.rows[index].in_tab, theme.selection())
+                                (index, edges, row_inset(&self.rows[index]), theme.selection())
                             }),
                             theme: theme.clone(),
                         })

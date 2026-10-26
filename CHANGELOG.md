@@ -10,9 +10,12 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - **Tab colors** - Right-click a pane > Tab color to give it a color of its own: pick one of the eight palette colors or a custom one, or reset it to the project color. The color is a second bar next to the project line on the pane's sidebar row, its title-bar chip and its pane header (a split tab's heading keeps only the project line), and stays with the pane when you drag it in or out of a split tab.
 - **Custom colors** - Pane colors and project colors (right-click a project > Color > Custom color…) have a color picker with a saturation square, a hue bar and a hex field. `projectColors` in settings.json also accepts `#rrggbb`.
+- **Close button on tabs** - Hover a tab, pane or split tab in the sidebar to get a red × that closes it (a split tab's × closes the whole tab). It takes the place of the config dir badge while the pointer is over the row.
 - **Reorder tabs** - Drag a tab (or a split tab's heading) up or down inside its project; a line shows where it lands. Dropping it on another project does nothing, and tabs cannot be moved while the sidebar filter has text.
 
 ### Changed
+- **Project headings** - The project name now sits at the left edge, left of the session bars, and the project dot and the fold chevron are together at the right, joined to the name by a hairline (left out when the name leaves no room for it); the tabs under it start 10 px further right.
+- **Split tab names** - A split tab without a name of its own is titled with its first pane's name instead of the project's.
 - **Saved sidebar order** - The order of projects and of the tabs inside them (what you set by dragging) is kept in the layout and restored when Gantry starts.
 - **Leaner sidebar menus** - The tab menu (title-bar chip) no longer offers "New Claude here with". Session and pane rows no longer offer "New Claude here", "New Claude here with" or "New terminal here" (use the project heading, or split the tab), and the project menu no longer has "Pin as favorite" / "Unpin" (favorites are still managed in Settings and the folder launcher).
 - **Notifications on macOS** - Settings > Alerts and the README now say that macOS needs Gantry allowed in System Settings > Notifications.

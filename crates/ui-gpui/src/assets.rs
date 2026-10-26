@@ -22,6 +22,12 @@ pub(crate) const CLOSE_ICON: &str = "icons/close.svg";
 /// The jump to bottom chip's icon (an arrow pointing down), drawn by `terminal_view`.
 pub(crate) const ARROW_DOWN_ICON: &str = "icons/arrow-down.svg";
 
+/// The project heading's fold chevron when it is open (pointing down), drawn by `sidebar_view`.
+pub(crate) const CHEVRON_DOWN_ICON: &str = "icons/chevron-down.svg";
+
+/// The project heading's fold chevron when it is folded (pointing right), drawn by `sidebar_view`.
+pub(crate) const CHEVRON_RIGHT_ICON: &str = "icons/chevron-right.svg";
+
 /// The last prompt card's icon (a chat bubble), drawn by `workspace_view::tab_content::prompt_card`.
 pub(crate) const PROMPT_ICON: &str = "icons/prompt.svg";
 
@@ -49,6 +55,8 @@ impl AssetSource for Assets {
             SPLIT_DOWN_ICON => Some(include_bytes!("../assets/icons/split-down.svg")),
             CLOSE_ICON => Some(include_bytes!("../assets/icons/close.svg")),
             ARROW_DOWN_ICON => Some(include_bytes!("../assets/icons/arrow-down.svg")),
+            CHEVRON_DOWN_ICON => Some(include_bytes!("../assets/icons/chevron-down.svg")),
+            CHEVRON_RIGHT_ICON => Some(include_bytes!("../assets/icons/chevron-right.svg")),
             PROMPT_ICON => Some(include_bytes!("../assets/icons/prompt.svg")),
             PIN_ICON => Some(include_bytes!("../assets/icons/pin.svg")),
             INFO_ICON => Some(include_bytes!("../assets/icons/info.svg")),
@@ -67,6 +75,8 @@ impl AssetSource for Assets {
             SPLIT_DOWN_ICON.into(),
             CLOSE_ICON.into(),
             ARROW_DOWN_ICON.into(),
+            CHEVRON_DOWN_ICON.into(),
+            CHEVRON_RIGHT_ICON.into(),
             PROMPT_ICON.into(),
             PIN_ICON.into(),
             INFO_ICON.into(),
@@ -88,6 +98,8 @@ mod tests {
             SPLIT_DOWN_ICON,
             CLOSE_ICON,
             ARROW_DOWN_ICON,
+            CHEVRON_DOWN_ICON,
+            CHEVRON_RIGHT_ICON,
             PROMPT_ICON,
             PIN_ICON,
             INFO_ICON,

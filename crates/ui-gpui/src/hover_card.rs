@@ -55,7 +55,7 @@ pub(crate) struct HoverCard {
 }
 
 /// The width of `text` on one line.
-fn line_width(window: &Window, text: &str, size: Pixels, weight: FontWeight) -> Pixels {
+pub(crate) fn line_width(window: &Window, text: &str, size: Pixels, weight: FontWeight) -> Pixels {
     let mut font = font(UI_FONT);
     font.weight = weight;
     let run =

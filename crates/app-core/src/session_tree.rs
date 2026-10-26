@@ -698,6 +698,8 @@ pub fn active(input: &ActiveInput<'_>, arrivals: &mut Arrivals, order: &mut Proj
     // A tab with several panes is one item, placed in the project of its first leaf that has an entry.
     let leaf_cwd: HashMap<NodeId, (&HostId, &Path)> =
         entries.iter().filter_map(|entry| Some((leaf_of(&entry.key)?, (entry.host, entry.cwd)))).collect();
+    let leaf_titles: HashMap<NodeId, &str> =
+        entries.iter().filter_map(|entry| Some((leaf_of(&entry.key)?, entry.title))).collect();
     let mut groups: Vec<Group<'_>> = Vec::new();
     let mut group_of: HashMap<NodeId, usize> = HashMap::new();
     for tab in input.tabs.iter().filter(|tab| tab.leaves.len() >= 2) {
@@ -712,7 +714,8 @@ pub fn active(input: &ActiveInput<'_>, arrivals: &mut Arrivals, order: &mut Proj
         for leaf in &tab.leaves {
             group_of.insert(*leaf, groups.len());
         }
-        groups.push(Group { tab, project: (input.project_of)(host, cwd), place, members: Vec::new() });
+        let first_title = tab.leaves.iter().find_map(|leaf| leaf_titles.get(leaf).copied());
+        groups.push(Group { tab, project: (input.project_of)(host, cwd), place, first_title, members: Vec::new() });
     }
 
     let mut fuzzy = Fuzzy::new(input.filter, entries.iter().map(|entry| keep_text(entry.title, entry.cwd, input.home)));
@@ -785,7 +788,11 @@ pub fn active(input: &ActiveInput<'_>, arrivals: &mut Arrivals, order: &mut Proj
                     let tab = group.tab;
                     let mut heading = Row::new(RowKind::Tab {
                         index: tab.index,
-                        title: tab.name.clone().unwrap_or_else(|| labels[&path].clone()),
+                        title: tab
+                            .name
+                            .clone()
+                            .or_else(|| group.first_title.map(String::from))
+                            .unwrap_or_else(|| labels[&path].clone()),
                         panes: tab.leaves.len(),
                         focused: tab.focused,
                         first: tab.leaves[0],
@@ -832,6 +839,8 @@ struct Group<'a> {
     project: PathBuf,
     /// Where it sorts: the oldest arrival among its leaves.
     place: u64,
+    /// The title of its first pane, which names the tab when the user gave it no name.
+    first_title: Option<&'a str>,
     /// Entries that passed the filter, in screen order.
     members: Vec<Entry<'a>>,
 }
@@ -1743,14 +1752,14 @@ mod tests {
     }
 
     #[test]
-    fn a_split_tab_heading_shows_its_name_else_its_project() {
+    fn a_split_tab_heading_shows_its_name_else_its_first_pane() {
         let mut fixture = Fixture::of(vec![], vec![shell_pane(1, "/r/alpha"), shell_pane(2, "/r/alpha")]);
         fixture.tabs = vec![tab(0, 1, &[2, 1])];
         let heading = |fixture: &mut Fixture| match fixture.rows()[1].kind.clone() {
             RowKind::Tab { title, .. } => title,
             other => panic!("{other:?}"),
         };
-        assert_eq!(heading(&mut fixture), "alpha");
+        assert_eq!(heading(&mut fixture), "pane 2");
         fixture.tabs[0].name = Some("Test cleanup".into());
         assert_eq!(heading(&mut fixture), "Test cleanup");
     }
