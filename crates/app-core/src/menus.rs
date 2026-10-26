@@ -109,6 +109,10 @@ pub enum MenuAction {
     PullOut(NodeId),
     /// Take a pane off the screen; it keeps running and stays in the sidebar.
     HidePane(NodeId),
+    /// Put this word in place of the misspelled one right-clicked on the prompt.
+    ReplaceWord(String),
+    /// Stop flagging this word.
+    LearnWord(String),
     /// Take over a session running outside Gantry.
     TakeOver {
         /// Session id.
@@ -217,6 +221,17 @@ pub fn pane_menu(leaf: NodeId, picked: bool, picks: usize) -> Vec<MenuItem> {
 /// The menu of a row among several picked with Shift-click.
 pub fn together_menu(count: usize) -> Vec<MenuItem> {
     vec![entry(&format!("Open {count} together"), MenuAction::OpenTogether)]
+}
+
+/// The menu of a misspelled word: its suggestions, then Learn Spelling.
+pub fn spelling_menu(word: &str, guesses: &[String]) -> Vec<MenuItem> {
+    let mut items: Vec<MenuItem> =
+        guesses.iter().take(6).map(|guess| entry(guess, MenuAction::ReplaceWord(guess.clone()))).collect();
+    if !items.is_empty() {
+        items.push(MenuItem::Separator);
+    }
+    items.push(entry("Learn Spelling", MenuAction::LearnWord(word.into())));
+    items
 }
 
 fn entry(label: &str, action: MenuAction) -> MenuItem {
@@ -1120,6 +1135,21 @@ mod tests {
         assert_eq!(new.action, MenuAction::NewHere { dir: "/r/app".into(), claude: true, host: devbox() });
         let MenuItem::Entry(copy) = items.last().unwrap() else { panic!() };
         assert_eq!(copy.action, MenuAction::Copy("/r/app".into()));
+    }
+
+    #[test]
+    fn a_spelling_menu_offers_guesses_then_learn() {
+        let labels = |items: Vec<MenuItem>| -> Vec<String> {
+            items
+                .into_iter()
+                .map(|item| match item {
+                    MenuItem::Entry(entry) => entry.label,
+                    _ => "-".into(),
+                })
+                .collect()
+        };
+        assert_eq!(labels(spelling_menu("teh", &["the".into(), "ten".into()])), ["the", "ten", "-", "Learn Spelling"]);
+        assert_eq!(labels(spelling_menu("qbz", &[])), ["Learn Spelling"]);
     }
 
     #[test]

@@ -4,8 +4,10 @@ use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use crate::assets::ARROW_DOWN_ICON;
+use crate::context_menu::{self, OpenMenu};
 use crate::hover_card::{self, HoverCard};
 use crate::settings_store::SettingsStore;
+use crate::spelling;
 use crate::theme::{RADIUS, Theme, UI_FONT, theme};
 use app_core::bidi::{RowOrder, logical_hit, to_display};
 use app_core::dialogs::{BarState, BarTone, PaneBar, pane_bar};
@@ -13,6 +15,7 @@ use app_core::host_state::HostCard;
 use app_core::image_paste;
 use app_core::input::{KeyInput, arrow_presses, edit_bytes, encode_key};
 use app_core::layout::grid_dims;
+use app_core::menus::{self, MenuAction};
 use app_core::mouse::{self, MouseAction, MouseMods, encode_mouse};
 use app_core::paste::{encode_paste, quote_paths};
 use app_core::scroll::{
@@ -259,6 +262,10 @@ pub struct TerminalView {
     click_cell: Option<(u16, u16)>,
     mouse_position: Option<Point<Pixels>>,
     hovered_link: Option<(u16, Range<usize>)>,
+    /// Misspelled words of prompt rows, by row text, so a redraw does not ask the spell checker again.
+    spell_cache: Vec<(String, Vec<Range<usize>>)>,
+    /// The open menu of a right-clicked misspelled word, and the word's row and columns.
+    spell_menu: Option<(OpenMenu, u16, Range<usize>)>,
     /// Display order of each viewport row in the last frame (`None`: drawn as stored).
     row_orders: Vec<Option<RowOrder>>,
     /// Input typed while Starting, sent on attach.
@@ -308,6 +315,8 @@ impl TerminalView {
             prompt_select: None,
             mouse_position: None,
             hovered_link: None,
+            spell_cache: Vec::new(),
+            spell_menu: None,
             row_orders: Vec::new(),
             held_input: Vec::new(),
             host_card: None,
@@ -633,8 +642,78 @@ impl TerminalView {
     }
 
     fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
-        let bytes = encode_paste(text, self.term.bracketed_paste());
+        // Pasting over a selection on the prompt replaces it.
+        let mut bytes = self.delete_prompt_selection().unwrap_or_default();
+        bytes.extend(encode_paste(text, self.term.bracketed_paste()));
         self.send_input(&bytes, cx);
+    }
+
+    /// Misspelled words (row, columns) on the prompt line of a Claude pane, but the one being typed.
+    fn misspelled_words(&mut self) -> Vec<(u16, Range<usize>)> {
+        if !self.launch.is_claude() {
+            return Vec::new();
+        }
+        let (Some(((first, _), (last, _))), Some((cursor_row, cursor_col))) =
+            (self.term.prompt_line(), self.term.prompt_cursor())
+        else {
+            return Vec::new();
+        };
+        let mut words = Vec::new();
+        for row in first..=last {
+            let text = self.term.row_text(row as u16);
+            let ranges = match self.spell_cache.iter().find(|(cached, _)| *cached == text) {
+                Some((_, ranges)) => ranges.clone(),
+                None => {
+                    let ranges = spelling::misspelled(&text);
+                    if self.spell_cache.len() >= 32 {
+                        self.spell_cache.remove(0);
+                    }
+                    self.spell_cache.push((text, ranges.clone()));
+                    ranges
+                }
+            };
+            let typing = |cols: &Range<usize>| row == cursor_row && cols.end == cursor_col;
+            words.extend(ranges.into_iter().filter(|cols| !typing(cols)).map(|cols| (row as u16, cols)));
+        }
+        words
+    }
+
+    /// Right-click on a misspelled prompt word opens its suggestions. False when the click is not on one.
+    fn open_spell_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some((col, row, _)) = self.logical_cell_at(position) else { return false };
+        let Some((_, cols)) =
+            self.misspelled_words().into_iter().find(|(at, cols)| *at == row && cols.contains(&(col as usize)))
+        else {
+            return false;
+        };
+        let text = self.term.row_text(row);
+        let word: String = text.chars().skip(cols.start).take(cols.len()).collect();
+        let items = menus::spelling_menu(&word, &spelling::guesses(&text, cols.clone()));
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
+        self.spell_menu = Some((OpenMenu::new(items, position, focus), row, cols));
+        cx.notify();
+        true
+    }
+
+    fn spell_pick(&mut self, action: &MenuAction, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, row, cols)) = self.spell_menu.take() else { return };
+        self.focus_handle.focus(window, cx);
+        match action {
+            MenuAction::ReplaceWord(word) => {
+                self.term.select_cells((row as usize, cols.start), (row as usize, cols.end));
+                if let Some(mut bytes) = self.delete_prompt_selection() {
+                    bytes.extend_from_slice(word.as_bytes());
+                    self.send_input(&bytes, cx);
+                }
+            }
+            MenuAction::LearnWord(word) => {
+                spelling::learn(word);
+                self.spell_cache.clear();
+            }
+            _ => {}
+        }
+        cx.notify();
     }
 
     /// Image paste (Ctrl+V with an image on the clipboard) in a Claude pane on an SSH host or in a dev container:
@@ -702,6 +781,9 @@ impl TerminalView {
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_handle.focus(window, cx);
         cx.emit(PaneEvent::Focused);
+        if event.button == MouseButton::Right && self.open_spell_menu(event.position, window, cx) {
+            return;
+        }
         let Some((col, row, right_half)) = self.logical_cell_at(event.position) else { return };
         if link_modifier(event.modifiers)
             && let Some(link) = link_at(&self.term.row_text(row), col as usize)
@@ -1008,6 +1090,29 @@ impl Render for TerminalView {
                 cell.style.underline = true;
             }
         }
+        for (row, cols) in self.misspelled_words() {
+            if let Some(cells) = snapshot.rows.get_mut(row as usize) {
+                for cell in cells.iter_mut().take(cols.end).skip(cols.start) {
+                    cell.style.misspelled = true;
+                }
+            }
+        }
+        let spell_menu = self.spell_menu.as_ref().map(|(menu, _, _)| {
+            let pick = cx.listener(|this, action: &MenuAction, window, cx| this.spell_pick(action, window, cx));
+            let dismiss = cx.listener(|this, _: &(), window, cx| {
+                this.spell_menu = None;
+                this.focus_handle.focus(window, cx);
+                cx.notify();
+            });
+            context_menu::render(
+                "spell-menu",
+                menu,
+                &theme,
+                cx.global::<SettingsStore>().settings(),
+                move |action, window, cx| pick(action, window, cx),
+                move |window, cx| dismiss(&(), window, cx),
+            )
+        });
         self.row_orders = to_display(&mut snapshot, cx.global::<SettingsStore>().settings().window.right_to_left);
         let hovering_link = self.hovered_link.is_some();
         let focused = self.focus_handle.is_focused(window);
@@ -1319,6 +1424,7 @@ impl Render for TerminalView {
                     ),
                 )
             })
+            .children(spell_menu)
     }
 }
 
@@ -1437,6 +1543,9 @@ fn paint_grid(
     }
 }
 
+/// The wavy underline of a misspelled word.
+const MISSPELLED: Hsla = Hsla { h: 0., s: 0.85, l: 0.55, a: 1. };
+
 /// `center`: draw a glyph narrower than one cell in the middle of that cell.
 #[allow(clippy::too_many_arguments)]
 fn paint_text(
@@ -1464,7 +1573,11 @@ fn paint_text(
         font: run_font,
         color,
         background_color: None,
-        underline: style.underline.then_some(UnderlineStyle { thickness: px(1.), color: Some(color), wavy: false }),
+        underline: if style.misspelled {
+            Some(UnderlineStyle { thickness: px(1.), color: Some(MISSPELLED), wavy: true })
+        } else {
+            style.underline.then_some(UnderlineStyle { thickness: px(1.), color: Some(color), wavy: false })
+        },
         strikethrough: style.strikethrough.then_some(StrikethroughStyle { thickness: px(1.), color: Some(color) }),
     };
     let line = window.text_system().shape_line(text.to_string().into(), font_size, &[run], force_width);

@@ -139,6 +139,8 @@ impl WorkspaceView {
             }
             MenuAction::PullOut(leaf) => self.on_sidebar_event(SidebarEvent::PullOut(leaf), window, cx),
             MenuAction::HidePane(leaf) => self.hide_leaf(leaf, window, cx),
+            // A pane's own spelling menu handles these.
+            MenuAction::ReplaceWord(_) | MenuAction::LearnWord(_) => {}
             MenuAction::TakeOver { session, cwd, host } => self.on_sidebar_event(
                 SidebarEvent::Activate { activation: Activation::TakeOver { session, cwd, host }, split: false },
                 window,

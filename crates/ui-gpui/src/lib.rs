@@ -21,6 +21,7 @@ mod settings_store;
 mod settings_view;
 mod setup_view;
 pub mod sidebar_view;
+mod spelling;
 mod ssh_wizard;
 pub mod terminal_view;
 mod theme;

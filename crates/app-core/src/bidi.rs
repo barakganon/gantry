@@ -72,6 +72,7 @@ pub fn display_line(text: &str) -> Option<Vec<(usize, char)>> {
         italic: false,
         underline: false,
         strikethrough: false,
+        misspelled: false,
     };
     let cells: Vec<CellView> =
         text.chars().map(|ch| CellView { ch, combining: None, style, wide: false, spacer: false }).collect();
@@ -202,6 +203,7 @@ mod tests {
             italic: false,
             underline: false,
             strikethrough: false,
+            misspelled: false,
         }
     }
 

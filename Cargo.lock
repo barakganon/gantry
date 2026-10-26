@@ -6745,6 +6745,8 @@ dependencies = [
  "gpui_platform",
  "notify",
  "notify-rust",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "protocol",
  "rodio",
  "serde_json",

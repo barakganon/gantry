@@ -33,6 +33,8 @@ pub struct CellStyle {
     pub underline: bool,
     /// Strikethrough.
     pub strikethrough: bool,
+    /// A misspelled word of the prompt line: a wavy red underline.
+    pub misspelled: bool,
 }
 
 /// One grid cell.
@@ -168,6 +170,7 @@ mod tests {
                 italic: false,
                 underline: false,
                 strikethrough: false,
+                misspelled: false,
             },
             wide: false,
             spacer: false,
