@@ -11,6 +11,9 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Changed
 - **SSH hosts card** - The automatic collapse above four hosts and the "n of m connected" heading are gone; use the toggle.
 
+### Fixed
+- **Tab switching and SSH hosts** - Ctrl+Tab and Back/Forward no longer stop on tabs of an SSH host that is not connected; they come back once the host connects.
+
 ## [0.11.0] - 2026-10-25
 
 ### Added
