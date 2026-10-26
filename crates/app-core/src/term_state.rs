@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::index::{Boundary, Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::Colors;
@@ -123,6 +123,8 @@ pub struct TermState {
     cell_size: (u16, u16),
     /// Where the last selection started, for Shift-click.
     anchor: Option<(Point, Side)>,
+    /// The selection's moving end, for Shift+arrows.
+    focus: Option<Point>,
 }
 
 impl TermState {
@@ -151,6 +153,7 @@ impl TermState {
             palette: DARK,
             cell_size: (0, 0),
             anchor: None,
+            focus: None,
         }
     }
 
@@ -292,7 +295,59 @@ impl TermState {
         };
         let point = self.viewport_point(col, row);
         self.anchor = Some((point, side(right_half)));
+        self.focus = Some(point);
         self.term.selection = Some(Selection::new(kind, point, side(right_half)));
+    }
+
+    /// Select everything: the scrollback and the screen.
+    pub fn select_all(&mut self) {
+        let (start, end) = (Point::new(self.term.topmost_line(), Column(0)), self.last_cell());
+        self.term.selection = Some(Selection::new(SelectionType::Simple, start, Side::Left));
+        self.stretch_to(end, Side::Right);
+    }
+
+    /// Shift+arrows on a mouse selection, anywhere in the scrollback: move its moving end by `reach`, forward or back.
+    /// `false` without a selection.
+    pub fn stretch_selection(&mut self, reach: Reach, forward: bool) -> bool {
+        let Some(focus) = self.focus.filter(|_| self.term.selection.is_some()) else { return false };
+        let step = |point: Point| -> Point {
+            if forward { point.add(&self.term, Boundary::Grid, 1) } else { point.sub(&self.term, Boundary::Grid, 1) }
+        };
+        let blank = |point: Point| self.term.grid()[point].c.is_whitespace();
+        let to = match reach {
+            Reach::Char => step(focus),
+            Reach::Line => Point::new(focus.line, if forward { self.term.last_column() } else { Column(0) }),
+            Reach::Word => {
+                let mut point = step(focus);
+                while blank(point) && point != step(point) {
+                    point = step(point);
+                }
+                if forward { self.term.semantic_search_right(point) } else { self.term.semantic_search_left(point) }
+            }
+        };
+        self.stretch_to(to, if forward { Side::Right } else { Side::Left });
+        true
+    }
+
+    /// Shift+Up/Down on a mouse selection: move its moving end a line up or down. `false` without a selection.
+    pub fn stretch_selection_rows(&mut self, down: bool) -> bool {
+        let Some(focus) = self.focus.filter(|_| self.term.selection.is_some()) else { return false };
+        let line: Line = if down { focus.line + 1 } else { focus.line - 1 };
+        let line = line.clamp(self.term.topmost_line(), self.term.bottommost_line());
+        self.stretch_to(Point::new(line, focus.column), if down { Side::Right } else { Side::Left });
+        true
+    }
+
+    fn stretch_to(&mut self, point: Point, side: Side) {
+        if let Some(selection) = self.term.selection.as_mut() {
+            selection.update(point, side);
+            self.focus = Some(point);
+            self.term.scroll_to_point(point);
+        }
+    }
+
+    fn last_cell(&self) -> Point {
+        Point::new(self.term.bottommost_line(), self.term.last_column())
     }
 
     /// Shift-click: stretch the selection, or select from where the last one started, to a viewport cell. `false`
@@ -311,6 +366,7 @@ impl TermState {
         let point = self.viewport_point(col, row);
         if let Some(selection) = self.term.selection.as_mut() {
             selection.update(point, side(right_half));
+            self.focus = Some(point);
         }
     }
 
@@ -702,6 +758,28 @@ mod tests {
         assert_eq!(t.selection_text().as_deref(), Some("teh_bug"));
         t.start_selection_by(6, 0, false, 3, false);
         assert_eq!(t.selection_text().as_deref().map(str::trim_end), Some("fix teh_bug now"));
+    }
+
+    #[test]
+    fn shift_arrows_stretch_a_mouse_selection_anywhere() {
+        let mut t = TermState::new(20, 3);
+        t.feed(b"one two three\r\nfour five\r\n> ");
+        t.start_selection(4, 0, false);
+        t.update_selection(4, 0, true);
+        assert!(t.stretch_selection(Reach::Char, true));
+        assert_eq!(t.selection_text().as_deref(), Some("tw"));
+        assert!(t.stretch_selection(Reach::Word, true));
+        assert_eq!(t.selection_text().as_deref(), Some("two"), "to the end of the word, as on macOS");
+        assert!(t.stretch_selection(Reach::Word, true));
+        assert_eq!(t.selection_text().as_deref(), Some("two three"));
+        assert!(t.stretch_selection_rows(true));
+        assert_eq!(t.selection_text().as_deref(), Some("two three\nfour five"));
+        assert!(t.stretch_selection(Reach::Line, false));
+        assert_eq!(t.selection_text().as_deref(), Some("two three"), "back to the start of the second line");
+        t.select_all();
+        assert_eq!(t.selection_text().as_deref().map(str::trim_end), Some("one two three\nfour five\n>"));
+        t.clear_selection();
+        assert!(!t.stretch_selection(Reach::Char, true));
     }
 
     #[test]

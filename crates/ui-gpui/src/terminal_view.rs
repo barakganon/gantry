@@ -507,18 +507,12 @@ impl TerminalView {
         }
     }
 
-    /// Text-field selection on the prompt line: Shift+arrows by character, with Option by word, with Cmd to the line's
-    /// edge; Cmd+A selects the whole line. Returns whether the key was taken.
+    /// Text-field selection: Shift+arrows by character, with Option by word, with Cmd to the line's edge. On the
+    /// prompt line they start at the cursor and Cmd+A selects the line; a mouse selection stretches anywhere, and Cmd+A
+    /// off the prompt (or again on it) selects all. Returns whether the key was taken.
     fn select_on_prompt(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
-        let Some(cursor) = self.term.prompt_cursor() else { return false };
         let (reach, forward) = match id {
-            "selectLine" => {
-                let Some((anchor, focus)) = self.term.prompt_line() else { return false };
-                self.term.select_cells(anchor, focus);
-                self.prompt_select = Some((anchor, focus));
-                cx.notify();
-                return true;
-            }
+            "selectLine" => (Reach::Line, true),
             "selectLeft" => (Reach::Char, false),
             "selectRight" => (Reach::Char, true),
             "selectWordLeft" => (Reach::Word, false),
@@ -527,6 +521,29 @@ impl TerminalView {
             "selectToLineEnd" => (Reach::Line, true),
             _ => return false,
         };
+        let mouse_selection = self.prompt_select.is_none() && self.term.selection_text().is_some();
+        let cursor = self.term.prompt_cursor();
+        if id == "selectLine" {
+            let line = self.term.prompt_line();
+            match line {
+                Some((anchor, focus)) if !mouse_selection && self.prompt_select != line => {
+                    self.term.select_cells(anchor, focus);
+                    self.prompt_select = Some((anchor, focus));
+                }
+                _ => {
+                    self.prompt_select = None;
+                    self.term.select_all();
+                }
+            }
+            cx.notify();
+            return true;
+        }
+        if mouse_selection || cursor.is_none() {
+            let taken = self.term.stretch_selection(reach, forward);
+            cx.notify();
+            return taken;
+        }
+        let Some(cursor) = cursor else { return false };
         let (anchor, focus) = self.prompt_select.unwrap_or((cursor, cursor));
         let (anchor, focus) = (anchor, self.term.prompt_step(focus, reach, forward));
         self.term.select_cells(anchor, focus);
@@ -611,6 +628,17 @@ impl TerminalView {
             && let Some(bytes) = self.continue_list(&input)
         {
             self.send_input(&bytes, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if input.shift
+            && !(input.ctrl || input.alt || input.platform)
+            && matches!(input.key.as_str(), "up" | "down")
+            && self.prompt_select.is_none()
+            && self.term.selection_text().is_some()
+            && self.term.stretch_selection_rows(input.key == "down")
+        {
+            cx.notify();
             cx.stop_propagation();
             return;
         }
