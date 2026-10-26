@@ -22,7 +22,7 @@ use app_core::scroll::{
 use app_core::session_tree::Tone;
 use app_core::settings::Settings;
 use app_core::snapshot::{CellStyle, Rgb, ScreenSnapshot, row_spans};
-use app_core::term_state::TermState;
+use app_core::term_state::{Reach, TermState};
 use app_core::theme_colors::{deepen, mix, terminal_palette};
 use app_core::url::link_at;
 use app_core::workspace::PaneLaunch;
@@ -252,6 +252,8 @@ pub struct TerminalView {
     /// While the jump to bottom chip scrolls the view down: the offset it started at and when.
     jump: Option<(usize, Instant)>,
     drag: Drag,
+    /// A selection made with Shift+arrows or Cmd+A on the prompt line: its fixed end and its moving end.
+    prompt_select: Option<((usize, usize), (usize, usize))>,
     /// Cell of a plain single click, which moves the prompt's cursor there when released without dragging.
     click_cell: Option<(u16, u16)>,
     mouse_position: Option<Point<Pixels>>,
@@ -302,6 +304,7 @@ impl TerminalView {
             jump: None,
             drag: Drag::default(),
             click_cell: None,
+            prompt_select: None,
             mouse_position: None,
             hovered_link: None,
             row_orders: Vec::new(),
@@ -490,6 +493,34 @@ impl TerminalView {
         }
     }
 
+    /// Text-field selection on the prompt line: Shift+arrows by character, with Option by word, with Cmd to the line's
+    /// edge; Cmd+A selects the whole line. Returns whether the key was taken.
+    fn select_on_prompt(&mut self, input: &KeyInput, cx: &mut Context<Self>) -> bool {
+        let Some(cursor) = self.term.prompt_cursor() else { return false };
+        let (anchor, focus) = match input.key.as_str() {
+            "a" if input.platform && !(input.shift || input.alt || input.ctrl) => {
+                let Some(line) = self.term.prompt_line() else { return false };
+                line
+            }
+            key @ ("left" | "right") if input.shift && !input.ctrl => {
+                let reach = if input.platform {
+                    Reach::Line
+                } else if input.alt {
+                    Reach::Word
+                } else {
+                    Reach::Char
+                };
+                let (anchor, focus) = self.prompt_select.unwrap_or((cursor, cursor));
+                (anchor, self.term.prompt_step(focus, reach, key == "right"))
+            }
+            _ => return false,
+        };
+        self.term.select_cells(anchor, focus);
+        self.prompt_select = Some((anchor, focus));
+        cx.notify();
+        true
+    }
+
     /// Keys that delete the selection, when it lies on the prompt's line: arrows to its end, then Backspaces.
     fn delete_prompt_selection(&self) -> Option<Vec<u8>> {
         let (moves, length) = self.term.prompt_selection_edit()?;
@@ -500,6 +531,7 @@ impl TerminalView {
 
     fn send_input(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
         self.jump = None;
+        self.prompt_select = None;
         self.term.scroll_to_bottom();
         self.term.clear_selection();
         self.write_pty(bytes);
@@ -545,6 +577,10 @@ impl TerminalView {
             && let Some(bytes) = self.delete_prompt_selection()
         {
             self.send_input(&bytes, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if cfg!(target_os = "macos") && self.select_on_prompt(&input, cx) {
             cx.stop_propagation();
             return;
         }
@@ -681,6 +717,7 @@ impl TerminalView {
         }
         let plain = !(event.modifiers.shift || event.modifiers.alt || event.modifiers.control);
         self.click_cell = (plain && event.click_count == 1).then_some((col, row));
+        self.prompt_select = None;
         self.term.start_selection(col, row, right_half);
         self.drag.selection_press();
         cx.notify();

@@ -119,7 +119,7 @@ fn csi_u(code: u32, m: u8) -> Vec<u8> {
 
 /// macOS text-editing keys as the readline/Emacs bytes shells and Claude read (iTerm's "Natural Text Editing"):
 /// Cmd+←/→ line start/end, Option+←/→ word back/forward, Cmd+Backspace / Cmd+Delete delete to line start/end,
-/// Option+Delete deletes the next word. `None` for any other key.
+/// Option+Delete deletes the next word, Cmd+Z undoes. `None` for any other key.
 pub fn text_edit_key(input: &KeyInput) -> Option<&'static [u8]> {
     if input.ctrl || input.shift {
         return None;
@@ -129,6 +129,7 @@ pub fn text_edit_key(input: &KeyInput) -> Option<&'static [u8]> {
         (true, false, "right") => Some(b"\x05"),
         (true, false, "backspace") => Some(b"\x15"),
         (true, false, "delete") => Some(b"\x0b"),
+        (true, false, "z") => Some(b"\x1f"),
         (false, true, "left") => Some(b"\x1bb"),
         (false, true, "right") => Some(b"\x1bf"),
         (false, true, "delete") => Some(b"\x1bd"),
@@ -230,6 +231,7 @@ mod tests {
         assert_eq!(edit("right", "a"), Some(&b"\x1bf"[..]));
         assert_eq!(edit("left", ""), None, "plain arrows stay arrows");
         assert_eq!(edit("left", "ps"), None, "Shift keeps its meaning");
+        assert_eq!(edit("z", "p"), Some(&b"\x1f"[..]), "undo");
         assert_eq!(edit("c", "p"), None);
     }
 
