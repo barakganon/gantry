@@ -280,6 +280,20 @@ impl WorkspaceView {
         self.save(cx);
     }
 
+    /// Take `leaf` off the screen without stopping it; its sidebar row shows it again.
+    pub(super) fn hide_leaf(&mut self, leaf: NodeId, window: &mut Window, cx: &mut Context<Self>) {
+        let from = self.drawn_rects();
+        if !self.workspace.hide(leaf) {
+            return;
+        }
+        if from.len() > 1 && from.iter().any(|(drawn, _)| *drawn == leaf) {
+            self.start_pane_anim(from, None, window, cx);
+        }
+        self.focus_current(window, cx);
+        self.save(cx);
+        cx.notify();
+    }
+
     pub(super) fn close_leaf(&mut self, leaf: NodeId, window: &mut Window, cx: &mut Context<Self>) {
         let from = self.drawn_rects();
         // A pane of the visible tab that keeps other panes: the survivors grow into its space.

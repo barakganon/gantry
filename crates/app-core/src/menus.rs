@@ -107,6 +107,8 @@ pub enum MenuAction {
     TogglePick(NodeId),
     /// Make a pane of a split tab a tab of its own; it keeps running.
     PullOut(NodeId),
+    /// Take a pane off the screen; it keeps running and stays in the sidebar.
+    HidePane(NodeId),
     /// Take over a session running outside Gantry.
     TakeOver {
         /// Session id.
@@ -207,7 +209,8 @@ pub fn pane_menu(leaf: NodeId, picked: bool, picks: usize) -> Vec<MenuItem> {
         items.push(entry(&format!("Open {picks} together"), MenuAction::OpenTogether));
     }
     items.push(entry("Rename pane", MenuAction::RenamePane(leaf)));
-    items.push(with_shortcut("Close pane", Shortcut::Close, MenuAction::ClosePane(leaf)));
+    items.push(entry("Close pane", MenuAction::HidePane(leaf)));
+    items.push(with_shortcut("Stop session", Shortcut::Close, MenuAction::ClosePane(leaf)));
     items
 }
 

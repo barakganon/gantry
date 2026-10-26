@@ -786,16 +786,17 @@ impl Workspace {
 
     /// What dropping leaf `src` on `zone` of leaf `target` (a pane of the visible tab) would do.
     pub fn drop_check(&self, src: NodeId, target: NodeId, zone: DropZone) -> DropCheck {
-        let (Some(from), Some(here)) = (self.tab_of(src), self.tab_of(target)) else { return DropCheck::Nothing };
+        // A hidden `src` (in no tab) comes from outside, like one from another tab.
+        let (from, Some(here)) = (self.tab_of(src), self.tab_of(target)) else { return DropCheck::Nothing };
         if src == target
             || here != self.active
-            || self.tabs[from].settings
+            || from.is_some_and(|from| self.tabs[from].settings)
             || self.tabs[here].settings
             || !self.leaves.contains_key(&src)
         {
             return DropCheck::Nothing;
         }
-        let adds_a_pane = from != here;
+        let adds_a_pane = from != Some(here);
         if matches!(zone, DropZone::Edge(_)) && adds_a_pane && self.tabs[here].root.leaves().len() >= MAX_PANES_PER_TAB
         {
             return DropCheck::Full;
@@ -825,9 +826,20 @@ impl Workspace {
 
     /// Remove `leaf` (and its tab if it was the last leaf). Focus moves to its sibling.
     pub fn close(&mut self, leaf: NodeId) -> Option<Leaf> {
-        self.tab_of(leaf)?;
-        self.detach(leaf);
+        if self.tab_of(leaf).is_some() {
+            self.detach(leaf);
+        }
         self.leaves.remove(&leaf)
+    }
+
+    /// Take `leaf` off the screen, its pane still running: it stays in `leaves` (and the sidebar) in no tab until
+    /// `focus` shows it again. False if it is not in a tab.
+    pub fn hide(&mut self, leaf: NodeId) -> bool {
+        if self.tab_of(leaf).is_none() {
+            return false;
+        }
+        self.detach(leaf);
+        true
     }
 
     /// Take `leaf` out of its tab's tree (the tab goes with its last leaf), leaving its `Leaf` entry alone. The tab's
@@ -889,12 +901,16 @@ impl Workspace {
             }
             DropZone::Center => {
                 // Detach first: while `src` is in two trees `tab_of` would find the earlier one.
-                self.detach(src);
+                if self.tab_of(src).is_some() {
+                    self.detach(src);
+                }
                 self.tabs[self.active].root.replace_leaf(target, src);
                 self.push_tab(target);
             }
             DropZone::Edge(side) => {
-                self.detach(src);
+                if self.tab_of(src).is_some() {
+                    self.detach(src);
+                }
                 let split = self.alloc();
                 self.tabs[self.active].root.insert_beside(target, side, split, src);
             }
@@ -915,6 +931,9 @@ impl Workspace {
 
     /// Focus `leaf`, selecting its tab. False if it is not in the layout.
     pub fn focus(&mut self, leaf: NodeId) -> bool {
+        if self.tab_of(leaf).is_none() && self.leaves.contains_key(&leaf) {
+            self.push_tab(leaf);
+        }
         let Some(index) = self.tab_of(leaf) else { return false };
         self.active = index;
         self.tabs[index].focused = leaf;
@@ -1528,6 +1547,32 @@ mod tests {
         assert_eq!(grid_slot(2), Some((0, Direction::Down)));
         assert_eq!(grid_slot(3), Some((1, Direction::Down)));
         assert_eq!(grid_slot(MAX_PANES_PER_TAB), None);
+    }
+
+    #[test]
+    fn a_hidden_pane_keeps_its_leaf_and_comes_back_on_focus() {
+        let mut ws = Workspace::default();
+        let here = tab_of_panes(&mut ws, 2);
+        assert!(ws.hide(here[1]));
+        assert_eq!(ws.tab_of(here[1]), None, "off the screen");
+        assert!(ws.leaves.contains_key(&here[1]), "still listed, its pane still running");
+        assert_eq!(ws.tabs[ws.active].root.leaves(), vec![here[0]]);
+        assert!(!ws.hide(here[1]), "already hidden");
+        assert!(ws.focus(here[1]));
+        assert_eq!(ws.tabs[ws.active].root.leaves(), vec![here[1]], "back as a tab of its own");
+    }
+
+    #[test]
+    fn a_hidden_pane_can_be_dropped_into_a_tab_or_closed() {
+        let mut ws = Workspace::default();
+        let here = tab_of_panes(&mut ws, 2);
+        ws.hide(here[1]);
+        assert_eq!(ws.drop_check(here[1], here[0], LEFT), DropCheck::Allowed);
+        assert!(ws.move_leaf(here[1], here[0], LEFT));
+        assert_eq!(ws.tabs[ws.active].root.leaves().len(), 2);
+        ws.hide(here[1]);
+        assert!(ws.close(here[1]).is_some());
+        assert!(!ws.leaves.contains_key(&here[1]));
     }
 
     #[test]

@@ -131,6 +131,7 @@ impl WorkspaceView {
                 self.sidebar.update(cx, |sidebar, cx| sidebar.toggle_pick(Activation::FocusLeaf(leaf), cx));
             }
             MenuAction::PullOut(leaf) => self.on_sidebar_event(SidebarEvent::PullOut(leaf), window, cx),
+            MenuAction::HidePane(leaf) => self.hide_leaf(leaf, window, cx),
             MenuAction::TakeOver { session, cwd, host } => self.on_sidebar_event(
                 SidebarEvent::Activate { activation: Activation::TakeOver { session, cwd, host }, split: false },
                 window,
