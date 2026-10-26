@@ -269,6 +269,8 @@ pub struct TerminalView {
     spell_menu: Option<(OpenMenu, u16, Range<usize>)>,
     /// A rewrite of the prompt selection Claude is working on.
     rephrase: Option<Task<()>>,
+    /// The last spelling fix or rephrase on the prompt (original, replacement), for Cmd+Z until other input.
+    replaced: Option<(String, String)>,
     /// Display order of each viewport row in the last frame (`None`: drawn as stored).
     row_orders: Vec<Option<RowOrder>>,
     /// Input typed while Starting, sent on attach.
@@ -321,6 +323,7 @@ impl TerminalView {
             spell_cache: Vec::new(),
             spell_menu: None,
             rephrase: None,
+            replaced: None,
             row_orders: Vec::new(),
             held_input: Vec::new(),
             host_card: None,
@@ -572,6 +575,7 @@ impl TerminalView {
     }
 
     fn send_input(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        self.replaced = None;
         self.jump = None;
         self.prompt_select = None;
         self.term.scroll_to_bottom();
@@ -646,6 +650,7 @@ impl TerminalView {
             && !self.term.alt_screen()
         {
             match edit_bytes(id) {
+                _ if id == "undoEdit" && self.undo_replace(cx) => {}
                 Some(bytes) => self.send_input(bytes, cx),
                 None if self.select_on_prompt(id, cx) => {}
                 None => return,
@@ -768,6 +773,21 @@ impl TerminalView {
         true
     }
 
+    /// Cmd+Z right after a spelling fix or rephrase: the replacement goes and the original comes back, in one step.
+    /// Only while the replacement still ends just before the cursor (a long paste Claude shows folded does not).
+    fn undo_replace(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((original, replacement)) = self.replaced.take() else { return false };
+        let last_line = replacement.lines().last().unwrap_or_default().trim_end();
+        let shown = self.term.prompt_text_to_cursor().is_some_and(|text| text.trim_end().ends_with(last_line));
+        if !shown {
+            return false;
+        }
+        let mut bytes = vec![0x7f; replacement.chars().count()];
+        bytes.extend(encode_paste(&original, self.term.bracketed_paste()));
+        self.send_input(&bytes, cx);
+        true
+    }
+
     /// Rewrite the prompt selection with Claude; the rewrite takes its place if the selection is still the same.
     fn rephrase_selection(&mut self, cx: &mut Context<Self>) {
         let Some(original) = self.term.selection_text() else { return };
@@ -780,6 +800,7 @@ impl TerminalView {
                     && this.term.selection_text().as_deref() == Some(original.as_str())
                 {
                     this.paste_text(&rewrite, cx);
+                    this.replaced = Some((original, rewrite));
                 }
                 cx.notify();
             });
@@ -792,9 +813,11 @@ impl TerminalView {
         match action {
             MenuAction::ReplaceWord(word) => {
                 self.term.select_cells((row as usize, cols.start), (row as usize, cols.end));
-                if let Some(mut bytes) = self.delete_prompt_selection() {
+                let original = self.term.selection_text();
+                if let (Some(mut bytes), Some(original)) = (self.delete_prompt_selection(), original) {
                     bytes.extend_from_slice(word.as_bytes());
                     self.send_input(&bytes, cx);
+                    self.replaced = Some((original, word.clone()));
                 }
             }
             MenuAction::LearnWord(word) => {

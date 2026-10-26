@@ -436,11 +436,14 @@ impl TermState {
 
     /// The prompt line's text up to the cursor, when the cursor is at its end.
     pub fn prompt_text_at_end(&self) -> Option<String> {
+        let (_, end) = self.prompt_line()?;
+        (self.prompt_cursor()? == end).then(|| self.prompt_text_to_cursor()).flatten()
+    }
+
+    /// The prompt line's text up to the cursor.
+    pub fn prompt_text_to_cursor(&self) -> Option<String> {
         let cursor = self.prompt_cursor()?;
-        let ((first, _), end) = self.prompt_line()?;
-        if cursor != end {
-            return None;
-        }
+        let ((first, _), _) = self.prompt_line()?;
         let cols = self.term.columns();
         let row_upto = |row: usize| {
             let width = if row == cursor.0 { cursor.1 } else { cols };
