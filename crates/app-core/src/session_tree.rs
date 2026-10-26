@@ -9,6 +9,7 @@ use protocol::message::{SessionInfo, SessionState, SessionStatus};
 
 use crate::fuzzy::Fuzzy;
 use crate::split_tree::NodeId;
+use crate::theme_colors::Tint;
 
 /// How a session's row is colored: what it needs from the user, most urgent first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -52,6 +53,8 @@ pub struct PaneEntry {
     pub alone: bool,
     /// Host folder of the dev container it runs in.
     pub container: Option<PathBuf>,
+    /// The color the user gave the pane.
+    pub color: Option<Tint>,
 }
 
 /// What keeps an Active entry's place in the list: its leaf, or (outside Gantry) its session.
@@ -958,6 +961,7 @@ mod tests {
             offline: false,
             alone: true,
             container: None,
+            color: None,
         }
     }
 

@@ -108,6 +108,28 @@ mod tests {
     }
 
     #[test]
+    fn colors_round_trip_and_bad_values_load_as_none() {
+        use crate::theme_colors::{ProjectColor, Tint};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("layout.json");
+        let mut workspace = sample();
+        let [first, second] = workspace.tabs[0].root.leaves()[..] else { panic!("two leaves") };
+        workspace.set_leaf_color(first, Some(Tint::Palette(ProjectColor::Pink)));
+        workspace.set_leaf_color(second, Some(Tint::Custom(0xa1b2c3)));
+        save(&path, &workspace).unwrap();
+        assert_eq!(load(&path).unwrap(), Some(workspace));
+        let mut value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["workspace"]["leaves"][first.to_string()]["color"], "pink");
+        assert_eq!(value["workspace"]["leaves"][second.to_string()]["color"], "#a1b2c3");
+        value["workspace"]["leaves"][first.to_string()]["color"] = "#12".into();
+        value["workspace"]["leaves"][second.to_string()].as_object_mut().unwrap().remove("color");
+        std::fs::write(&path, value.to_string()).unwrap();
+        let loaded = load(&path).unwrap().unwrap();
+        assert_eq!(loaded.leaf_color(first), None);
+        assert_eq!(loaded.leaf_color(second), None);
+    }
+
+    #[test]
     fn a_missing_file_is_no_layout() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(load(&dir.path().join("layout.json")).unwrap(), None);

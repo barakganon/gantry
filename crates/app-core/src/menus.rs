@@ -565,6 +565,7 @@ mod tests {
             offline: false,
             alone: true,
             container: None,
+            color: None,
         };
         Row::new(RowKind::Pane { entry, tone: if ended { Tone::Closed } else { Tone::Idle }, note: String::new() })
     }

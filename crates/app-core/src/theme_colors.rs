@@ -186,6 +186,19 @@ pub enum Tint {
     Custom(u32),
 }
 
+impl serde::Serialize for Tint {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_setting())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Tint {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Tint, D::Error> {
+        let text = <String as serde::Deserialize>::deserialize(deserializer)?;
+        Tint::parse(&text).ok_or_else(|| serde::de::Error::custom(format!("not a color: {text}")))
+    }
+}
+
 impl From<ProjectColor> for Tint {
     fn from(color: ProjectColor) -> Tint {
         Tint::Palette(color)
