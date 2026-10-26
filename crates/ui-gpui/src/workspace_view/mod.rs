@@ -478,6 +478,7 @@ impl WorkspaceView {
             hosts.insert(host, conn);
         }
         let sidebar = cx.new(SidebarView::new);
+        sidebar.update(cx, |sidebar, _| sidebar.set_hosts_collapsed(restored.workspace.sidebar.hosts_collapsed));
         let sidebar_events = cx.subscribe_in(&sidebar, window, |this, _, event: &SidebarEvent, window, cx| {
             this.on_sidebar_event(event.clone(), window, cx)
         });

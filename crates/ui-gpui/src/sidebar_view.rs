@@ -6,7 +6,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use app_core::host_state::{COLLAPSE_ABOVE, HostDot, hosts_heading};
+use app_core::host_state::{HostDot, hosts_summary};
+use app_core::hosts_fold::HostsFold;
 use app_core::menus::{self, MenuAction, MenuContext};
 use app_core::session_tree::{
     self, Activation, ActiveInput, Arrivals, GroupEdges, PaneEntry, ProjectOrder, ProjectRoots, Row, RowKey, RowKind,
@@ -26,6 +27,7 @@ use protocol::message::SessionInfo;
 
 use crate::context_menu::{self, OpenMenu};
 use crate::field;
+use crate::git_scrollbar::Extent;
 use crate::hover_card::{self, HoverCard, Lead, lead};
 use crate::pane_drag::DraggedPane;
 use crate::settings_store::{SettingsStore, dir_badge_for, shortcut_label};
@@ -103,6 +105,8 @@ pub enum SidebarEvent {
     ConnectHost(HostId),
     /// "Add SSH host…" was clicked.
     AddSshHost,
+    /// The SSH hosts heading was clicked: the block is now folded (`true`) or open, to be saved.
+    HostsCollapsed(bool),
     /// The update pill of an SSH host was clicked, at this window position.
     UpdateHost {
         /// The host.
@@ -166,8 +170,8 @@ pub struct SidebarView {
     git_row: Option<String>,
     /// The SSH hosts block above Recent sessions: every configured host.
     hosts: Vec<HostRow>,
-    /// The block is expanded by hand (it starts collapsed with more than `COLLAPSE_ABOVE` hosts).
-    hosts_open: bool,
+    /// Whether the SSH hosts block is folded to one line, by hand or by the sessions list starting to scroll.
+    hosts_fold: HostsFold,
     /// What a middle press started on, until the button is released: a row, or the Settings row (`None`).
     middle_pressed: Option<Option<RowKey>>,
     _refresh: Task<()>,
@@ -223,7 +227,7 @@ impl SidebarView {
             settings_active: false,
             git_row: None,
             hosts: Vec::new(),
-            hosts_open: false,
+            hosts_fold: HostsFold::new(false),
             middle_pressed: None,
             _refresh: refresh,
         };
@@ -259,6 +263,11 @@ impl SidebarView {
     /// The title of `leaf`'s row.
     pub fn leaf_title(&self, leaf: NodeId) -> Option<String> {
         session_tree::leaf_title(&self.all_rows, leaf)
+    }
+
+    /// Starts the SSH hosts block as saved in the layout.
+    pub fn set_hosts_collapsed(&mut self, collapsed: bool) {
+        self.hosts_fold = HostsFold::new(collapsed);
     }
 
     /// Whether Settings is open and whether it is the visible tab: its row above the list.
@@ -297,31 +306,56 @@ impl SidebarView {
         }
     }
 
-    /// The SSH hosts block: a filled card with a heading, a row per host (only the ones that are up while it is
-    /// collapsed) and "Add SSH host…".
+    /// The SSH hosts block: a filled card with a heading that folds it, a row per host and "Add SSH host…"; folded, it
+    /// is the heading with the number of connected hosts and one status dot.
     fn render_hosts(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
-        let total = self.hosts.len();
-        let collapsible = total > COLLAPSE_ABOVE;
-        let open = !collapsible || self.hosts_open;
-        let up = self.hosts.iter().filter(|row| row.up).count();
-        let heading = div().px_2().pt(px(2.)).pb_1().text_xs().text_color(rgb(theme.tokens.muted));
-        let heading = if collapsible {
-            heading
-                .id("ssh-hosts-heading")
-                .flex()
-                .gap_1()
-                .cursor_pointer()
-                .hover(|style| style.text_color(rgb(theme.tokens.text)))
-                .child(if open { "▾" } else { "▸" })
-                .child(hosts_heading(up, total))
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.hosts_open = !this.hosts_open;
-                    cx.notify();
-                }))
-                .into_any_element()
-        } else {
-            heading.child(hosts_heading(up, total)).into_any_element()
-        };
+        let open = !self.hosts_fold.collapsed();
+        let summary = hosts_summary(&self.hosts.iter().map(|row| row.dot).collect::<Vec<_>>());
+        let pill_color = if summary.connected > 0 { theme.tokens.accent } else { theme.tokens.muted };
+        let heading = div()
+            .id("ssh-hosts-heading")
+            .px_2()
+            .pt(px(2.))
+            .pb_1()
+            .flex()
+            .items_center()
+            .gap_1()
+            .text_xs()
+            .text_color(rgb(theme.tokens.muted))
+            .cursor_pointer()
+            .hover(|style| style.text_color(rgb(theme.tokens.text)))
+            .child(div().flex_none().child(if open { "▾" } else { "▸" }))
+            .child(div().flex_1().truncate().child("SSH hosts"))
+            .when(!open && summary.total > 0, |heading| {
+                heading.child(
+                    div()
+                        .flex_none()
+                        .h(theme.ui(16.))
+                        .px(theme.ui(6.))
+                        .flex()
+                        .items_center()
+                        .rounded_full()
+                        .bg(rgba((pill_color << 8) | 0x26))
+                        .text_size(theme.ui(11.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(pill_color))
+                        .child(summary.connected.to_string()),
+                )
+            })
+            .when(!open, |heading| {
+                heading.child(
+                    div()
+                        .flex_none()
+                        .size(px(7.))
+                        .rounded_full()
+                        .bg(rgb(crate::context_menu::host_dot_color(theme, summary.dot))),
+                )
+            })
+            .on_click(cx.listener(|this, _, _, cx| {
+                let collapsed = this.hosts_fold.toggle();
+                cx.emit(SidebarEvent::HostsCollapsed(collapsed));
+                cx.notify();
+            }));
         let row_base = |id: (&'static str, usize)| {
             div().id(id).h(theme.ui(28.)).px_2().flex().items_center().gap_2().rounded(px(RADIUS - 2.)).text_xs()
         };
@@ -336,7 +370,7 @@ impl SidebarView {
             .rounded(px(RADIUS))
             .bg(rgba((theme.tokens.raised << 8) | 0x80))
             .child(heading)
-            .children(self.hosts.iter().enumerate().filter(|(_, row)| open || row.up).map(|(index, row)| {
+            .children(self.hosts.iter().enumerate().filter(|_| open).map(|(index, row)| {
                 let host = row.host.clone();
                 let dot = div()
                     .flex_none()
@@ -1095,6 +1129,12 @@ impl Render for SidebarView {
         }
         // The rename field has the focus then, not the filter.
         let focused = focused && self.renaming.is_none();
+        // The sessions list started to scroll (or fits again): the SSH hosts block may fold by itself.
+        if let Some(extent) = Extent::of(&self.scroll)
+            && self.hosts_fold.observe(extent.contents.1 > extent.viewport.1 + 0.5)
+        {
+            cx.notify();
+        }
         let theme = theme(cx).clone();
         div()
             .key_context("Sidebar")
