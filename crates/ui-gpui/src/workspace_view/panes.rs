@@ -328,6 +328,10 @@ impl WorkspaceView {
             }
         }
         self.workspace.note_visit();
+        if let Some(open) = &self.dialog {
+            open.view.focus_handle(cx).focus(window, cx);
+            return;
+        }
         if let Some((setup, _)) = &self.setup {
             setup.focus_handle(cx).focus(window, cx);
             return;
@@ -487,18 +491,17 @@ impl WorkspaceView {
         if self.running_panes(&local, cx) == 0 {
             return true;
         }
-        let remote_hosts: Vec<String> = self
-            .ssh_hosts
-            .iter()
-            .filter(|entry| {
-                let host = HostId::named(&entry.name);
-                self.host_state(&host) == HostState::Connected
-                    && self.workspace.leaves.iter().any(|(id, leaf)| {
-                        leaf.host == host && self.slots.get(id).is_some_and(|slot| slot.view.read(cx).is_running())
-                    })
-            })
-            .map(|entry| entry.name.clone())
-            .collect();
+        let mut running_hosts: Vec<String> = Vec::new();
+        for (id, leaf) in &self.workspace.leaves {
+            if !leaf.host.is_local()
+                && self.host_state(&leaf.host) == HostState::Connected
+                && self.slots.get(id).is_some_and(|slot| slot.view.read(cx).is_running())
+            {
+                running_hosts.push(leaf.host.name().to_string());
+            }
+        }
+        let listed: Vec<String> = self.ssh_hosts.iter().map(|entry| entry.name.clone()).collect();
+        let remote_hosts = dialogs::order_hosts(&listed, &running_hosts);
         let spec = dialogs::quit(&self.counts_for(&local, cx), &remote_hosts);
         self.open_dialog(spec, DialogAction::Quit, window, cx);
         false

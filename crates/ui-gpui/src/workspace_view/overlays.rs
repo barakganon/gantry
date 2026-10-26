@@ -198,7 +198,9 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.dialog.is_some() {
+        if let Some(open) = &self.dialog {
+            tracing::warn!("dialog not shown, another one is open: {}", spec.title);
+            open.view.focus_handle(cx).focus(window, cx);
             return false;
         }
         let view = cx.new(|cx| DialogView::new(spec, cx));
@@ -320,7 +322,9 @@ impl WorkspaceView {
         let view = cx.new(|cx| AskpassView::new(prompt, cx));
         let subscription =
             cx.subscribe_in(&view, window, |this, _, _: &AskpassEvent, window, cx| this.show_next_question(window, cx));
-        view.focus_handle(cx).focus(window, cx);
+        if self.dialog.is_none() {
+            view.focus_handle(cx).focus(window, cx);
+        }
         self.askpass = Some((view, subscription));
         cx.notify();
     }

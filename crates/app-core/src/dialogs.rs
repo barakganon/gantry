@@ -136,6 +136,16 @@ fn keep_or_end(
     }
 }
 
+/// Host names for the Quit dialog: those in `listed` (the `sshHosts` order) first, then the others sorted.
+pub fn order_hosts(listed: &[String], running: &[String]) -> Vec<String> {
+    let mut ordered: Vec<String> = listed.iter().filter(|name| running.contains(name)).cloned().collect();
+    let mut others: Vec<String> = running.iter().filter(|name| !listed.contains(name)).cloned().collect();
+    others.sort();
+    others.dedup();
+    ordered.extend(others);
+    ordered
+}
+
 /// Quit Gantry with a local session running; `remote_hosts` are the hosts with sessions that keep running.
 pub fn quit(counts: &Counts, remote_hosts: &[String]) -> DialogSpec {
     let detail = (!remote_hosts.is_empty())
@@ -380,6 +390,13 @@ pub fn pane_bar(state: &BarState, is_claude: bool) -> PaneBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quit_hosts_follow_the_listed_order_then_the_rest_by_name() {
+        let names = |list: &[&str]| list.iter().map(|name| name.to_string()).collect::<Vec<_>>();
+        let ordered = order_hosts(&names(&["b", "a"]), &names(&["z", "a", "y", "b", "z"]));
+        assert_eq!(ordered, names(&["b", "a", "y", "z"]));
+    }
 
     fn labels(spec: &DialogSpec) -> Vec<&str> {
         spec.actions.iter().map(|a| a.label.as_str()).collect()
