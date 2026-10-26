@@ -310,15 +310,48 @@ impl TermState {
     /// prompt (main screen, not scrolled back) and on the cursor's line, soft-wrapped rows included; a cell past the
     /// line's text means its end. `None` when it cannot or need not move.
     pub fn cursor_moves_to(&self, col: u16, row: u16) -> Option<i32> {
-        let grid = self.term.grid();
-        if self.alt_screen() || grid.display_offset() != 0 {
+        let cursor = self.prompt_cursor()?;
+        let steps = self.steps(cursor, (row as usize, self.clamp_to_text(row as usize, col as usize)))?;
+        (steps != 0).then_some(steps)
+    }
+
+    /// A selection on the prompt's line, as an edit: the cursor moves this many characters to the selection's end,
+    /// then this many Backspaces delete it. `None` without a selection there.
+    pub fn prompt_selection_edit(&self) -> Option<(i32, usize)> {
+        let cursor = self.prompt_cursor()?;
+        let range = self.term.selection.as_ref()?.to_range(&self.term)?;
+        let (start, end) = (range.start, range.end);
+        if start.line.0 < 0 {
             return None;
         }
-        let (cursor_col, cursor_row) = self.cursor_cell()?;
-        let (row, cols) = (row as usize, self.term.columns());
-        let text_end = self.row_text(row as u16).chars().count();
-        let end = if row == cursor_row { text_end.max(cursor_col) } else { text_end };
-        let (from, to) = ((cursor_row, cursor_col), (row, (col as usize).min(end)));
+        let start = (start.line.0 as usize, self.clamp_to_text(start.line.0 as usize, start.column.0));
+        let end = (end.line.0 as usize, self.clamp_to_text(end.line.0 as usize, end.column.0 + 1));
+        let (moves, length) = (self.steps(cursor, end)?, self.steps(start, end)?);
+        (length > 0).then_some((moves, length as usize))
+    }
+
+    /// The cursor's viewport cell, when it sits at a prompt: main screen, not scrolled back.
+    fn prompt_cursor(&self) -> Option<(usize, usize)> {
+        if self.alt_screen() || self.term.grid().display_offset() != 0 {
+            return None;
+        }
+        self.cursor_cell().map(|(col, row)| (row, col))
+    }
+
+    /// `col` on viewport `row`, no further than the end of its text (or the cursor, on the cursor's row).
+    fn clamp_to_text(&self, row: usize, col: usize) -> usize {
+        let end = self.row_text(row as u16).chars().count();
+        let end = match self.cursor_cell() {
+            Some((cursor_col, cursor_row)) if cursor_row == row => end.max(cursor_col),
+            _ => end,
+        };
+        col.min(end)
+    }
+
+    /// Characters from viewport cell `from` to `to` (`(row, col)`), negative going left, when every row between
+    /// them wraps into the next (one line of input); wide characters count once.
+    fn steps(&self, from: (usize, usize), to: (usize, usize)) -> Option<i32> {
+        let (grid, cols) = (self.term.grid(), self.term.columns());
         let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
         let cell = |index: usize| &grid[Line((index / cols) as i32)][Column(index % cols)];
         if (lo.0..hi.0).any(|row| !cell(row * cols + cols - 1).flags.contains(Flags::WRAPLINE)) {
@@ -327,7 +360,7 @@ impl TermState {
         let steps = (lo.0 * cols + lo.1..hi.0 * cols + hi.1)
             .filter(|&index| !cell(index).flags.contains(Flags::WIDE_CHAR_SPACER))
             .count() as i32;
-        (steps != 0).then_some(if from <= to { steps } else { -steps })
+        Some(if from <= to { steps } else { -steps })
     }
 
     /// Resolve the visible screen into plain data for rendering.
@@ -476,6 +509,30 @@ mod tests {
         let mut t = TermState::new(10, 3);
         t.feed(b"ab\r\ncd");
         assert_eq!(t.cursor_moves_to(0, 0), None, "a previous line is not the prompt");
+    }
+
+    #[test]
+    fn a_selection_on_the_prompt_line_becomes_moves_and_backspaces() {
+        let mut t = TermState::new(20, 3);
+        t.feed(b"$ hello world");
+        t.start_selection(8, 0, false);
+        t.update_selection(12, 0, true);
+        assert_eq!(t.prompt_selection_edit(), Some((0, 5)), "\"world\" ends at the cursor");
+        t.start_selection(2, 0, false);
+        t.update_selection(6, 0, true);
+        assert_eq!(t.prompt_selection_edit(), Some((-6, 5)), "\"hello\": back to its end, then delete it");
+        t.start_selection(10, 0, false);
+        t.update_selection(19, 0, true);
+        assert_eq!(t.prompt_selection_edit(), Some((0, 3)), "blank space past the text is not deleted");
+    }
+
+    #[test]
+    fn a_selection_off_the_prompt_line_is_not_an_edit() {
+        let mut t = TermState::new(20, 3);
+        t.feed(b"old output\r\n$ ls");
+        t.start_selection(0, 0, false);
+        t.update_selection(2, 0, true);
+        assert_eq!(t.prompt_selection_edit(), None);
     }
 
     #[test]

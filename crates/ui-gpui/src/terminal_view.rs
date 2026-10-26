@@ -490,6 +490,14 @@ impl TerminalView {
         }
     }
 
+    /// Keys that delete the selection, when it lies on the prompt's line: arrows to its end, then Backspaces.
+    fn delete_prompt_selection(&self) -> Option<Vec<u8>> {
+        let (moves, length) = self.term.prompt_selection_edit()?;
+        let mut bytes = arrow_presses(moves, self.term.key_modes().app_cursor);
+        bytes.extend(std::iter::repeat_n(0x7f, length));
+        Some(bytes)
+    }
+
     fn send_input(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
         self.jump = None;
         self.term.scroll_to_bottom();
@@ -528,6 +536,15 @@ impl TerminalView {
             platform: keystroke.modifiers.platform,
         };
         if self.paste_image(&input, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        let plain = !(input.ctrl || input.alt || input.shift || input.platform);
+        if plain
+            && matches!(input.key.as_str(), "backspace" | "delete")
+            && let Some(bytes) = self.delete_prompt_selection()
+        {
+            self.send_input(&bytes, cx);
             cx.stop_propagation();
             return;
         }
@@ -879,7 +896,10 @@ impl EntityInputHandler for TerminalView {
         if input_fate(&self.state) == InputFate::Drop {
             return;
         }
-        self.send_input(text.as_bytes(), cx);
+        // Typing over a selection on the prompt replaces it.
+        let mut bytes = self.delete_prompt_selection().unwrap_or_default();
+        bytes.extend_from_slice(text.as_bytes());
+        self.send_input(&bytes, cx);
     }
 
     // IME composition (pre-edit) is not displayed in M1; only committed text is sent.
