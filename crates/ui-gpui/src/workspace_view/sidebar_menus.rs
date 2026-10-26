@@ -8,6 +8,8 @@ use protocol::message::SessionState;
 
 use app_core::menus::{self, MenuAction, MenuContext, MenuEntry, MenuItem, Shortcut};
 use app_core::session_tree::{Activation, Tone, Unseen, status_tone};
+use app_core::split_tree::DropZone;
+use app_core::workspace::{MAX_PANES_PER_TAB, grid_slot};
 
 use crate::context_menu::OpenMenu;
 use crate::settings_store::SettingsStore;
@@ -20,6 +22,39 @@ const SIDEBAR_MAX: f32 = 600.0;
 
 impl WorkspaceView {
     /// Do what a right-click menu entry says.
+    /// Open the sessions picked in the sidebar as 2×2 grids, a new tab per four: closed ones are resumed first, open
+    /// ones are moved out of their tabs.
+    fn open_together(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = self.sidebar.update(cx, |sidebar, cx| sidebar.take_together(cx));
+        let mut leaves = Vec::new();
+        for activation in picked {
+            let leaf = match activation {
+                Activation::FocusLeaf(leaf) => Some(leaf),
+                Activation::FocusPane(key) => self.workspace.leaf_for_pane(&key),
+                Activation::Resume { session, cwd, host } => {
+                    self.resume_session(host.clone(), session.clone(), cwd, false, window, cx);
+                    self.workspace.leaf_for_session(&host, &session)
+                }
+                _ => None,
+            };
+            leaves.extend(leaf.filter(|leaf| !leaves.contains(leaf)));
+        }
+        for group in leaves.chunks(MAX_PANES_PER_TAB) {
+            self.workspace.pull_out(group[0]);
+            self.workspace.focus(group[0]);
+            for (index, &leaf) in group.iter().enumerate() {
+                if let Some((anchor, side)) = grid_slot(index) {
+                    self.workspace.move_leaf(leaf, group[anchor], DropZone::Edge(side));
+                }
+            }
+        }
+        if let Some(&first) = leaves.first() {
+            self.focus_leaf(first, window, cx);
+        }
+        self.save(cx);
+        cx.notify();
+    }
+
     pub(super) fn run_menu_action(&mut self, action: MenuAction, window: &mut Window, cx: &mut Context<Self>) {
         match action {
             MenuAction::Split { tab, axis } => {
@@ -91,6 +126,7 @@ impl WorkspaceView {
                 self.focus_leaf(leaf, window, cx);
                 self.rerun_leaf(leaf, window, cx);
             }
+            MenuAction::OpenTogether => self.open_together(window, cx),
             MenuAction::TakeOver { session, cwd, host } => self.on_sidebar_event(
                 SidebarEvent::Activate { activation: Activation::TakeOver { session, cwd, host }, split: false },
                 window,

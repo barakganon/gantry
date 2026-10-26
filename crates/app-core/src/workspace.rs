@@ -531,6 +531,17 @@ impl Default for SidebarState {
 /// Most panes one tab may hold; further splits are refused.
 pub const MAX_PANES_PER_TAB: usize = 4;
 
+/// Where pane `index` of a group opened together goes, as a 2×2 grid: beside or below an earlier pane of the
+/// group (`None` for the first, which keeps its tab).
+pub fn grid_slot(index: usize) -> Option<(usize, Direction)> {
+    match index {
+        1 => Some((0, Direction::Right)),
+        2 => Some((0, Direction::Down)),
+        3 => Some((1, Direction::Down)),
+        _ => None,
+    }
+}
+
 /// What a drop of one pane on another would do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DropCheck {
@@ -1509,6 +1520,15 @@ mod tests {
     }
 
     const LEFT: DropZone = DropZone::Edge(Direction::Left);
+
+    #[test]
+    fn panes_opened_together_fill_a_two_by_two_grid() {
+        assert_eq!(grid_slot(0), None);
+        assert_eq!(grid_slot(1), Some((0, Direction::Right)));
+        assert_eq!(grid_slot(2), Some((0, Direction::Down)));
+        assert_eq!(grid_slot(3), Some((1, Direction::Down)));
+        assert_eq!(grid_slot(MAX_PANES_PER_TAB), None);
+    }
 
     #[test]
     fn drop_check_allows_edges_below_the_limit() {
