@@ -10,7 +10,7 @@ use crate::theme::Theme;
 
 /// The "Tabs at start" choices: whether `restoreLayout` is on, its label and what it does.
 const RESTORE: [(bool, &str, &str); 2] = [
-    (true, "Restore", "Reattach running sessions; finished ones offer Continue."),
+    (true, "Restore", "Reattach running sessions; finished ones offer Resume."),
     (
         false,
         "Running only",
@@ -162,7 +162,7 @@ impl SettingsView {
                     row(
                         theme,
                         "Resume sessions",
-                        "Run finished sessions again on start (Claude with --resume) instead of waiting for Continue.",
+                        "Run finished sessions again on start (Claude with --resume) instead of waiting for Resume.",
                         resume_switch,
                         resume_reset,
                     ),

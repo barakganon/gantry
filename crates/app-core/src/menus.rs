@@ -448,7 +448,7 @@ pub fn row_menu(row: &Row, alone: &dyn Fn(NodeId) -> bool, context: &MenuContext
                     }
                 }
                 (SessionState::Closed, Some(leaf)) if *tone == Tone::Closed => {
-                    items.push(accented("Continue", MenuAction::Continue(*leaf)));
+                    items.push(accented("Resume conversation", MenuAction::Continue(*leaf)));
                     items.push(MenuItem::Separator);
                 }
                 _ => {}
@@ -467,7 +467,7 @@ pub fn row_menu(row: &Row, alone: &dyn Fn(NodeId) -> bool, context: &MenuContext
         RowKind::Pane { entry: pane, .. } => {
             let vscode = vscode_args(&pane.cwd, None, pane.container.as_deref());
             match (pane.claude, pane.ended) {
-                (true, true) => items.push(accented("Continue", MenuAction::Continue(pane.leaf))),
+                (true, true) => items.push(accented("Resume conversation", MenuAction::Continue(pane.leaf))),
                 (false, _) => items.push(entry("Rename…", MenuAction::RenamePane(pane.leaf))),
                 (true, false) => {}
             }
@@ -779,7 +779,7 @@ mod tests {
         assert_eq!(
             labels(&items),
             [
-                "Continue",
+                "Resume conversation",
                 "│",
                 "Copy session id",
                 "Copy folder path",
@@ -792,7 +792,7 @@ mod tests {
         let MenuItem::Entry(cont) = &items[0] else { panic!() };
         assert_eq!((cont.accent, cont.action.clone()), (true, MenuAction::Continue(4)));
         let items = row_menu(&pane_row(true, true), ALONE, &MenuContext::default()).unwrap();
-        assert_eq!(labels(&items)[0], "Continue");
+        assert_eq!(labels(&items)[0], "Resume conversation");
     }
 
     #[test]
