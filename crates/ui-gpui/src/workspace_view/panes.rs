@@ -1,9 +1,9 @@
 use super::layout::start_rects;
-use super::{PendingOpen, Slot, WorkspaceView};
+use super::{DialogAction, PendingOpen, Slot, WorkspaceView};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use app_core::attention::without_claude_glyph;
+use app_core::dialogs;
 use app_core::host_state::HostState;
 use app_core::split_tree::{Axis, NodeId};
 use app_core::workspace::{DirBadge, PaneLaunch};
@@ -492,7 +492,7 @@ impl WorkspaceView {
         leaves.iter().filter(|leaf| self.slots.get(leaf).is_some_and(|slot| slot.view.read(cx).is_running())).count()
     }
 
-    /// Window close requested: true to close now; otherwise asks Detach / Stop all / Cancel.
+    /// Window close requested: true to close now; otherwise opens the Quit dialog and returns false.
     pub fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let (bounds, maximized) = match window.window_bounds() {
             WindowBounds::Windowed(bounds) | WindowBounds::Fullscreen(bounds) => (bounds, false),
@@ -512,34 +512,20 @@ impl WorkspaceView {
         if self.running_panes(&local, cx) == 0 {
             return true;
         }
-        let remote_running = self.workspace.leaves.iter().any(|(id, leaf)| {
-            !leaf.host.is_local() && self.slots.get(id).is_some_and(|slot| slot.view.read(cx).is_running())
-        });
-        let detail = if remote_running {
-            "Sessions keep running after Detach. Stop all sessions ends this machine's sessions only; sessions on SSH hosts keep running."
-        } else {
-            "Sessions keep running after Detach."
-        };
-        if self.prompting.replace(true) {
-            return false;
-        }
-        let answer = window.prompt(
-            PromptLevel::Info,
-            "Quit Gantry?",
-            Some(detail),
-            &["Detach", "Stop all sessions", "Cancel"],
-            cx,
-        );
-        let (client, prompting) = (self.local_client().clone(), self.prompting.clone());
-        cx.spawn(async move |_, cx| match answer.await {
-            Ok(0) => cx.update(|cx| cx.quit()),
-            Ok(1) => {
-                client.stop_all_and_wait(Duration::from_secs(2));
-                cx.update(|cx| cx.quit());
-            }
-            _ => prompting.set(false),
-        })
-        .detach();
+        let remote_hosts: Vec<String> = self
+            .ssh_hosts
+            .iter()
+            .filter(|entry| {
+                let host = HostId::named(&entry.name);
+                self.host_state(&host) == HostState::Connected
+                    && self.workspace.leaves.iter().any(|(id, leaf)| {
+                        leaf.host == host && self.slots.get(id).is_some_and(|slot| slot.view.read(cx).is_running())
+                    })
+            })
+            .map(|entry| entry.name.clone())
+            .collect();
+        let spec = dialogs::quit(&self.counts_for(&local, cx), &remote_hosts);
+        self.open_dialog(spec, DialogAction::Quit, window, cx);
         false
     }
 

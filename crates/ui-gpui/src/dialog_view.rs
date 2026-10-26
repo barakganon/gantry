@@ -51,6 +51,9 @@ impl DialogView {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.answered {
+            return;
+        }
         let keystroke = &event.keystroke;
         let len = self.spec.actions.len();
         match (keystroke.key.as_str(), keystroke.modifiers.shift) {

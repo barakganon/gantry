@@ -5,7 +5,6 @@ mod askpass_view;
 mod assets;
 mod color_picker_view;
 mod context_menu;
-#[allow(dead_code)] // used from Task 3
 mod dialog_view;
 mod field;
 mod git_chip;

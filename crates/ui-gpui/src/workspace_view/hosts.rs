@@ -1,8 +1,9 @@
-use super::{CardKind, HostConn, HostUpdate, HostUpdateCard, UpdatePhase, WorkspaceView};
+use super::{CardKind, DialogAction, HostConn, HostUpdate, HostUpdateCard, UpdatePhase, WorkspaceView};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use app_core::dialogs;
 use app_core::host_install::check;
 use app_core::host_state::{DisconnectPlan, FailKind, HostDot, HostEvent, HostState, reconnect_delay};
 use app_core::host_update::{Click, click_plan, needs_update};
@@ -13,7 +14,7 @@ use app_core::workspace::{HostLive, reconcile, without_killed_offline};
 use daemon::client::Connection;
 use daemon::paths::{Paths, current_profile};
 use daemon::ssh::{Attempt, AttemptHandle, HANDSHAKE_TIMEOUT, Share, SshHostSpec, connect as ssh_connect};
-use gpui::{Context, Focusable, Pixels, Point, PromptLevel, Window, prelude::*};
+use gpui::{Context, Focusable, Pixels, Point, Window, prelude::*};
 use protocol::host::HostId;
 use protocol::message::PaletteColors;
 
@@ -555,41 +556,15 @@ impl WorkspaceView {
             }
             Some(DisconnectPlan::StopNow) => self.leave_host(host, true, cx),
             Some(DisconnectPlan::Ask) => {
-                if self.prompting.replace(true) {
-                    return;
-                }
-                let detail = format!("Detach keeps its {running} session(s) running.");
-                let answer = window.prompt(
-                    PromptLevel::Info,
-                    &format!("Disconnect from {}?", host.name()),
-                    Some(&detail),
-                    &["Detach", "Close all sessions", "Cancel"],
-                    cx,
-                );
-                let host = host.clone();
-                cx.spawn_in(window, async move |this, cx| {
-                    let choice = answer.await;
-                    let _ = this.update_in(cx, |this, _, cx| {
-                        this.prompting.set(false);
-                        // The host may have changed while the prompt was up.
-                        if this.host_state(&host) != HostState::Connected {
-                            return;
-                        }
-                        match choice {
-                            Ok(0) => this.leave_host(&host, false, cx),
-                            Ok(1) => this.leave_host(&host, true, cx),
-                            _ => {}
-                        }
-                    });
-                })
-                .detach();
+                let spec = dialogs::disconnect(host.name(), &self.counts_for(&leaves, cx));
+                self.open_dialog(spec, DialogAction::Disconnect(host.clone()), window, cx);
             }
         }
     }
 
     /// Disconnect from connected SSH host `host`, first asking its daemon to stop (which ends its sessions) when
     /// `stop`. Nothing reconnects by itself; its panes show Not connected.
-    fn leave_host(&mut self, host: &HostId, stop: bool, cx: &mut Context<Self>) {
+    pub(super) fn leave_host(&mut self, host: &HostId, stop: bool, cx: &mut Context<Self>) {
         if stop && let Some(client) = self.client(host).cloned() {
             // The thread's clone keeps the connection open until the request is written.
             std::thread::spawn(move || client.stop_all_and_wait(Duration::from_secs(2)));

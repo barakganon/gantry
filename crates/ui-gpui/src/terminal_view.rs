@@ -398,6 +398,11 @@ impl TerminalView {
         self.state == PaneState::Live
     }
 
+    /// Whether this pane runs Claude.
+    pub fn is_claude(&self) -> bool {
+        self.launch.is_claude()
+    }
+
     /// Whether the process ended (or could not start): the pane shows Continue / Restart.
     pub fn has_ended(&self) -> bool {
         matches!(self.state, PaneState::Exited(_) | PaneState::Failed(_))

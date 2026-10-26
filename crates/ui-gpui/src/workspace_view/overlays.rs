@@ -1,7 +1,9 @@
-use super::{OpenLauncher, OpenRecents, OpenSettings, WorkspaceView};
+use super::{DialogAction, OpenDialog, OpenLauncher, OpenRecents, OpenSettings, WorkspaceView};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::Duration;
 
+use app_core::dialogs::{Counts, DialogSpec};
 use app_core::host_state::HostState;
 use app_core::launcher::{self, OpenFolder, OpenPane, RecentFolder};
 use app_core::menus::ColorTarget;
@@ -14,12 +16,13 @@ use app_core::workspace::ClaudeDirs;
 use daemon::askpass::AskPrompt;
 use gpui::{Context, Focusable, PathPromptOptions, Window, prelude::*};
 use protocol::host::HostId;
-use protocol::message::{PaletteColors, SessionInfo};
+use protocol::message::{PaletteColors, SessionInfo, SessionStatus};
 
 use app_core::session_tree::status_tone;
 
 use crate::askpass_view::{AskpassEvent, AskpassView};
 use crate::color_picker_view::{ColorPickerEvent, ColorPickerView};
+use crate::dialog_view::{DialogEvent, DialogView};
 use crate::launcher_view::{LauncherEvent, LauncherHost, LauncherView};
 use crate::recents_view::{RecentsEvent, RecentsView, SEARCH_LIMIT};
 use crate::release_check::CheckRow;
@@ -185,6 +188,78 @@ impl WorkspaceView {
         view.focus_handle(cx).focus(window, cx);
         self.launcher = Some((view, subscription));
         cx.notify();
+    }
+
+    /// Show `spec` as a dialog; `action` runs with the answer. False when a dialog is already open.
+    pub(super) fn open_dialog(
+        &mut self,
+        spec: DialogSpec,
+        action: DialogAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.dialog.is_some() {
+            return false;
+        }
+        let view = cx.new(|cx| DialogView::new(spec, cx));
+        let _subscription = cx.subscribe_in(&view, window, |this, _, event: &DialogEvent, window, cx| {
+            let DialogEvent::Chosen(index) = event;
+            this.on_dialog_chosen(*index, window, cx)
+        });
+        view.focus_handle(cx).focus(window, cx);
+        self.dialog = Some(OpenDialog { view, action, _subscription });
+        cx.notify();
+        true
+    }
+
+    /// The dialog was answered: close it, give the focus back and run what the choice asks.
+    fn on_dialog_chosen(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(open) = self.dialog.take() else { return };
+        self.focus_current(window, cx);
+        cx.notify();
+        match open.action {
+            DialogAction::Quit => match index {
+                0 => cx.quit(),
+                1 => {
+                    self.local_client().stop_all_and_wait(Duration::from_secs(2));
+                    cx.quit();
+                }
+                _ => {}
+            },
+            DialogAction::Disconnect(host) => {
+                // The host may have changed while the dialog was up.
+                if self.host_state(&host) != HostState::Connected {
+                    return;
+                }
+                match index {
+                    0 => self.leave_host(&host, false, cx),
+                    1 => self.leave_host(&host, true, cx),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// What runs in `leaves`: running panes split into Claude and terminals, and the Claude ones working now.
+    pub(super) fn counts_for(&self, leaves: &[NodeId], cx: &Context<Self>) -> Counts {
+        let sessions = self.sidebar.read(cx).sessions();
+        let mut counts = Counts::default();
+        for leaf in leaves {
+            let Some(slot) = self.slots.get(leaf) else { continue };
+            let view = slot.view.read(cx);
+            if !view.is_running() {
+                continue;
+            }
+            if view.is_claude() {
+                counts.claude += 1;
+                if matches!(self.workspace.leaf_status(*leaf, sessions), Some(SessionStatus::Busy)) {
+                    counts.working += 1;
+                }
+            } else {
+                counts.terminal += 1;
+            }
+        }
+        counts
     }
 
     /// A question from ssh: show it now, or after the ones before it.
