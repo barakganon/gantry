@@ -68,14 +68,15 @@ impl DialogView {
     }
 }
 
-/// A choice's frame: the focus ring (2 px accent) around `fill`.
-fn frame(id: usize, focused: bool, theme: &Theme) -> Stateful<Div> {
-    div()
-        .id(("dialog-action", id))
-        .cursor_pointer()
-        .rounded(px(RADIUS_SMALL))
-        .border_2()
-        .border_color(rgb(if focused { theme.tokens.accent } else { theme.tokens.surface }))
+/// A choice's frame: the focus ring (2 px, accent; the text color on an accent fill) around `fill`.
+fn frame(id: usize, focused: bool, on_accent: bool, theme: &Theme) -> Stateful<Div> {
+    div().id(("dialog-action", id)).cursor_pointer().rounded(px(RADIUS_SMALL)).border_2().border_color(rgb(
+        match (focused, on_accent) {
+            (false, _) => theme.tokens.surface,
+            (true, true) => theme.tokens.text,
+            (true, false) => theme.tokens.accent,
+        },
+    ))
 }
 
 fn label_color(style: ChoiceStyle, pills: bool, theme: &Theme) -> u32 {
@@ -110,15 +111,15 @@ impl Render for DialogView {
                 .text_color(rgb(label_color(style, pills, &theme)))
                 .child(action.label.clone());
             let item = if style == ChoiceStyle::Cancel && !pills {
-                frame(index, focused, &theme).py(theme.ui(6.)).flex().justify_center().child(label)
+                frame(index, focused, false, &theme).py(theme.ui(6.)).flex().justify_center().child(label)
             } else if pills {
-                frame(index, focused, &theme)
+                frame(index, focused, style == ChoiceStyle::Primary, &theme)
                     .px(theme.ui(14.))
                     .py(theme.ui(7.))
                     .bg(rgb(fill(style, pills, &theme)))
                     .child(label)
             } else {
-                frame(index, focused, &theme)
+                frame(index, focused, false, &theme)
                     .px(theme.ui(12.))
                     .py(theme.ui(9.))
                     .bg(rgb(fill(style, pills, &theme)))
