@@ -129,6 +129,8 @@ pub fn edit_bytes(id: &str) -> Option<&'static [u8]> {
         "deleteToLineEnd" => b"\x0b",
         "deleteWordRight" => b"\x1bd",
         "undoEdit" => b"\x1f",
+        // Claude's Ctrl+G: the prompt opens in an editor (VS Code when found), long pastes in full.
+        "editPrompt" => b"\x07",
         _ => return None,
     })
 }
@@ -150,7 +152,8 @@ pub enum ListItem {
 /// The list item `line` (prompt text up to the cursor, past the prompt's `>`) ends with, if it is one:
 /// `1. `/`1) ` count up, `- `, `* ` and `• ` repeat.
 pub fn list_item(line: &str) -> Option<ListItem> {
-    let item = line.trim_start_matches([' ', '>', '❯', '│']);
+    // Claude puts a no-break space after its `❯`.
+    let item = line.trim_start_matches(|ch: char| ch.is_whitespace() || matches!(ch, '>' | '❯' | '│'));
     let (marker, rest) = item.split_once(' ')?;
     let next = match marker {
         "-" | "*" | "•" => format!("{marker} "),
@@ -297,6 +300,7 @@ mod tests {
         assert_eq!(list_item("> 1. buy milk"), Some(ListItem::Next("2. ".into())));
         assert_eq!(list_item("  9) ok"), Some(ListItem::Next("10) ".into())));
         assert_eq!(list_item("❯ - a"), Some(ListItem::Next("- ".into())));
+        assert_eq!(list_item("❯\u{a0}1. foo"), Some(ListItem::Next("2. ".into())), "as Claude draws it");
         assert_eq!(list_item("  • שלום"), Some(ListItem::Next("• ".into())));
         assert_eq!(list_item("  3. "), Some(ListItem::End(3)));
         assert_eq!(list_item("> fix 1. bug"), None);

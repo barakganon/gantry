@@ -115,6 +115,8 @@ pub enum MenuAction {
     LearnWord(String),
     /// Rewrite the prompt selection with Claude.
     Rephrase,
+    /// Open the Claude prompt in an editor.
+    EditPrompt,
     /// Copy the prompt selection and delete it.
     CutSelection,
     /// Copy the terminal selection.
@@ -232,12 +234,14 @@ pub fn together_menu(count: usize) -> Vec<MenuItem> {
 }
 
 /// The right-click menu of the terminal: a misspelled word's suggestions and Learn Spelling, Cut (a selection on the
-/// prompt), Copy (any selection) and Paste (at a prompt), then Rephrase (a selection on a Claude prompt).
+/// prompt), Copy (any selection) and Paste (at a prompt), then Edit in Editor (a Claude prompt) and Rephrase (a
+/// selection on a Claude prompt).
 pub fn prompt_menu(
     misspelled: Option<(&str, &[String])>,
     cut: bool,
     copy: bool,
     paste: bool,
+    editor: bool,
     rephrase: bool,
 ) -> Vec<MenuItem> {
     let mut groups: Vec<Vec<MenuItem>> = Vec::new();
@@ -256,9 +260,14 @@ pub fn prompt_menu(
         edit.push(entry("Paste", MenuAction::PasteClipboard));
     }
     groups.push(edit);
-    if rephrase {
-        groups.push(vec![entry("Rephrase with Claude", MenuAction::Rephrase)]);
+    let mut claude = Vec::new();
+    if editor {
+        claude.push(entry("Edit in Editor", MenuAction::EditPrompt));
     }
+    if rephrase {
+        claude.push(entry("Rephrase with Claude", MenuAction::Rephrase));
+    }
+    groups.push(claude);
     let groups: Vec<_> = groups.into_iter().filter(|group| !group.is_empty()).collect();
     groups.join(&MenuItem::Separator)
 }
@@ -1179,16 +1188,16 @@ mod tests {
         };
         let guesses = ["the".to_string(), "ten".to_string()];
         assert_eq!(
-            labels(prompt_menu(Some(("teh", &guesses)), false, false, false, false)),
+            labels(prompt_menu(Some(("teh", &guesses)), false, false, false, false, false)),
             ["the", "ten", "-", "Learn Spelling"]
         );
-        assert_eq!(labels(prompt_menu(Some(("qbz", &[])), false, false, false, false)), ["Learn Spelling"]);
+        assert_eq!(labels(prompt_menu(Some(("qbz", &[])), false, false, false, false, false)), ["Learn Spelling"]);
         assert_eq!(
-            labels(prompt_menu(Some(("qbz", &[])), true, true, true, true)),
-            ["Learn Spelling", "-", "Cut", "Copy", "Paste", "-", "Rephrase with Claude"]
+            labels(prompt_menu(Some(("qbz", &[])), true, true, true, true, true)),
+            ["Learn Spelling", "-", "Cut", "Copy", "Paste", "-", "Edit in Editor", "Rephrase with Claude"]
         );
-        assert_eq!(labels(prompt_menu(None, false, true, false, false)), ["Copy"]);
-        assert!(prompt_menu(None, false, false, false, false).is_empty());
+        assert_eq!(labels(prompt_menu(None, false, true, false, false, false)), ["Copy"]);
+        assert!(prompt_menu(None, false, false, false, false, false).is_empty());
     }
 
     #[test]

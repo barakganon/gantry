@@ -757,7 +757,7 @@ impl TerminalView {
         let copy = self.term.selection_text().is_some();
         let paste = typing && self.term.prompt_cursor().is_some();
         let misspelled = word.as_ref().map(|_| (spelled.as_str(), guesses.as_slice()));
-        let items = menus::prompt_menu(misspelled, cut, copy, paste, rephrase);
+        let items = menus::prompt_menu(misspelled, cut, copy, paste, paste && self.launch.is_claude(), rephrase);
         if items.is_empty() {
             return false;
         }
@@ -802,6 +802,7 @@ impl TerminalView {
                 self.spell_cache.clear();
             }
             MenuAction::Rephrase => self.rephrase_selection(cx),
+            MenuAction::EditPrompt => self.send_input(b"\x07", cx),
             MenuAction::CutSelection => self.cut(&Cut, window, cx),
             MenuAction::CopySelection => self.copy(&Copy, window, cx),
             MenuAction::PasteClipboard => self.paste(&Paste, window, cx),

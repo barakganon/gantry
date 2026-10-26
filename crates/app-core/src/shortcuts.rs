@@ -101,6 +101,7 @@ pub const ACTIONS: &[Action] = &[
     mac("deleteToLineEnd", "Delete to line end", "cmd-delete"),
     mac("deleteWordRight", "Delete the next word", "alt-delete"),
     mac("undoEdit", "Undo", "cmd-z"),
+    mac("editPrompt", "Edit the prompt in an editor (Claude)", "cmd-shift-e"),
     mac("selectLeft", "Select a character left", "shift-left"),
     mac("selectRight", "Select a character right", "shift-right"),
     mac("selectWordLeft", "Select a word left", "alt-shift-left"),
