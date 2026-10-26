@@ -507,11 +507,14 @@ pub struct SidebarState {
     pub visible: bool,
     /// Width in pixels.
     pub width: f32,
+    /// The SSH hosts card is folded to one line by hand (an automatic fold is not saved).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hosts_collapsed: bool,
 }
 
 impl Default for SidebarState {
     fn default() -> Self {
-        SidebarState { visible: true, width: SIDEBAR_WIDTH }
+        SidebarState { visible: true, width: SIDEBAR_WIDTH, hosts_collapsed: false }
     }
 }
 
@@ -2335,6 +2338,22 @@ mod tests {
     fn layouts_saved_with_a_sidebar_view_still_load() {
         let state: SidebarState = serde_json::from_str(r#"{"visible":false,"width":300.0,"view":"Status"}"#).unwrap();
         assert_eq!((state.visible, state.width), (false, 300.0));
+    }
+
+    #[test]
+    fn a_sidebar_state_without_hosts_collapsed_loads_expanded() {
+        let state: SidebarState = serde_json::from_str(r#"{"visible":false,"width":300.0,"view":"Status"}"#).unwrap();
+        assert!(!state.hosts_collapsed);
+    }
+
+    #[test]
+    fn hosts_collapsed_is_written_only_when_true() {
+        let mut state = SidebarState::default();
+        assert!(!serde_json::to_string(&state).unwrap().contains("hosts_collapsed"));
+        state.hosts_collapsed = true;
+        let text = serde_json::to_string(&state).unwrap();
+        assert!(text.contains("hosts_collapsed"));
+        assert_eq!(serde_json::from_str::<SidebarState>(&text).unwrap(), state);
     }
 
     #[test]

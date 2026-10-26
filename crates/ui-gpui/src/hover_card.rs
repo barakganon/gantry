@@ -1,6 +1,7 @@
 //! What a sidebar row, tab or pane header leaves out (status and how long, config dir, dev container, folder),
 //! shown after GPUI's tooltip delay (0.5 s).
 
+use app_core::host_state::HostDot;
 use app_core::session_tree::Tone;
 use app_core::workspace::DirBadge;
 use gpui::{
@@ -139,10 +140,53 @@ impl Render for HoverCard {
     }
 }
 
+/// What the collapsed SSH hosts line leaves out: one line per host with its state.
+#[derive(Clone)]
+pub(crate) struct HostsCard {
+    /// Each host's dot, name and state ("connected", "not connected").
+    pub hosts: Vec<(HostDot, String, String)>,
+}
+
+impl Render for HostsCard {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = theme(cx).clone();
+        let card = div()
+            .max_w(theme.ui(320.))
+            .px(theme.ui(12.))
+            .py(theme.ui(10.))
+            .flex()
+            .flex_col()
+            .gap(theme.ui(4.))
+            .rounded(px(RADIUS_SMALL))
+            .bg(rgb(theme.tokens.raised))
+            .border_1()
+            .border_color(rgb(theme.tokens.line))
+            .shadow_lg()
+            .font_family(UI_FONT)
+            .text_sm()
+            .text_color(rgb(theme.tokens.text))
+            .children(self.hosts.iter().map(|(dot, name, state)| {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(px(7.))
+                            .rounded_full()
+                            .bg(rgb(context_menu::host_dot_color(&theme, *dot))),
+                    )
+                    .child(div().truncate().child(format!("{name} · {state}")))
+            }));
+        fade_in(card, "fade-hosts-card", FadeKind::Card, cx.global::<SettingsStore>().settings().animate_ui)
+    }
+}
+
 /// A `.tooltip(…)` builder showing `card`.
 ///
 /// While a menu is open it shows nothing: GPUI's tooltips ignore occlusion, so the card would be drawn over the menu.
-pub(crate) fn tooltip(card: HoverCard) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+pub(crate) fn tooltip<T: Render + Clone>(card: T) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
     move |_, cx| {
         if context_menu::any_open() { cx.new(|_| NoCard).into() } else { cx.new(|_| card.clone()).into() }
     }
