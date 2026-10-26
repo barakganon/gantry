@@ -45,15 +45,16 @@ use protocol::message::PaneId;
 
 #[allow(missing_docs)]
 mod terminal_actions {
-    gpui::actions!(terminal, [Copy, Paste, ZoomIn, ZoomOut, ZoomReset]);
+    gpui::actions!(terminal, [Copy, Cut, Paste, ZoomIn, ZoomOut, ZoomReset]);
 }
-use terminal_actions::{Copy, Paste, ZoomIn, ZoomOut, ZoomReset};
+use terminal_actions::{Copy, Cut, Paste, ZoomIn, ZoomOut, ZoomReset};
 
 /// The binding of a terminal action (`id` is its settings key) at `key`.
 pub(crate) fn terminal_binding(id: &str, key: &str) -> Option<KeyBinding> {
     let context = Some("Terminal");
     Some(match id {
         "copy" => KeyBinding::new(key, Copy, context),
+        "cut" => KeyBinding::new(key, Cut, context),
         "paste" => KeyBinding::new(key, Paste, context),
         "zoomIn" => KeyBinding::new(key, ZoomIn, context),
         "zoomOut" => KeyBinding::new(key, ZoomOut, context),
@@ -637,6 +638,16 @@ impl TerminalView {
         }
     }
 
+    /// Copy the selection; on the prompt, delete it too.
+    fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        self.copy(&Copy, window, cx);
+        if input_fate(&self.state) != InputFate::Drop
+            && let Some(bytes) = self.delete_prompt_selection()
+        {
+            self.send_input(&bytes, cx);
+        }
+    }
+
     fn paste(&mut self, _: &Paste, _window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = cx.read_from_clipboard() else { return };
         let files = item.entries().iter().find_map(|entry| match entry {
@@ -706,8 +717,9 @@ impl TerminalView {
     fn open_spell_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some((col, row, _)) = self.logical_cell_at(position) else { return false };
         let word = self.misspelled_words().into_iter().find(|(at, cols)| *at == row && cols.contains(&(col as usize)));
-        let rephrase =
-            self.launch.is_claude() && self.rephrase.is_none() && self.term.prompt_selection_edit().is_some();
+        let typing = input_fate(&self.state) != InputFate::Drop;
+        let cut = typing && self.term.prompt_selection_edit().is_some();
+        let rephrase = cut && self.launch.is_claude() && self.rephrase.is_none();
         let (text, cols) = match &word {
             Some((_, cols)) => (self.term.row_text(row), cols.clone()),
             None => (String::new(), 0..0),
@@ -715,9 +727,9 @@ impl TerminalView {
         let spelled: String = text.chars().skip(cols.start).take(cols.len()).collect();
         let guesses = word.as_ref().map(|_| spelling::guesses(&text, cols.clone())).unwrap_or_default();
         let copy = self.term.selection_text().is_some();
-        let paste = input_fate(&self.state) != InputFate::Drop && self.term.prompt_cursor().is_some();
+        let paste = typing && self.term.prompt_cursor().is_some();
         let misspelled = word.as_ref().map(|_| (spelled.as_str(), guesses.as_slice()));
-        let items = menus::prompt_menu(misspelled, copy, paste, rephrase);
+        let items = menus::prompt_menu(misspelled, cut, copy, paste, rephrase);
         if items.is_empty() {
             return false;
         }
@@ -762,6 +774,7 @@ impl TerminalView {
                 self.spell_cache.clear();
             }
             MenuAction::Rephrase => self.rephrase_selection(cx),
+            MenuAction::CutSelection => self.cut(&Cut, window, cx),
             MenuAction::CopySelection => self.copy(&Copy, window, cx),
             MenuAction::PasteClipboard => self.paste(&Paste, window, cx),
             _ => {}
@@ -1220,6 +1233,7 @@ impl Render for TerminalView {
             .key_context("Terminal")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::copy))
+            .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
             .when(self.paths_are_local(), |el| {
                 el.on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.paste_paths(paths, cx)))

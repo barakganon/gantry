@@ -143,6 +143,7 @@ impl WorkspaceView {
             MenuAction::ReplaceWord(_)
             | MenuAction::LearnWord(_)
             | MenuAction::Rephrase
+            | MenuAction::CutSelection
             | MenuAction::CopySelection
             | MenuAction::PasteClipboard => {}
             MenuAction::TakeOver { session, cwd, host } => self.on_sidebar_event(
