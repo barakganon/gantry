@@ -36,11 +36,20 @@ pub enum NotesBlock {
     /// A `#`, `##` or `###` line.
     Heading(String),
     /// A `- ` or `* ` line.
-    Bullet(String),
+    Bullet(Inline),
     /// Any other non-empty line.
-    Line(String),
+    Line(Inline),
     /// A blank line.
     Gap,
+}
+
+/// A line of text with the byte ranges of its `**bold**` parts; the markers are not in `text`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Inline {
+    /// The text without the `**` markers.
+    pub text: String,
+    /// Byte ranges of `text` that were bold.
+    pub bold: Vec<std::ops::Range<usize>>,
 }
 
 /// What the Settings "Check now" row says.
@@ -121,6 +130,25 @@ impl Online {
     }
 }
 
+/// `line` with each `**…**` pair removed and its content recorded as bold; an unpaired `**` stays as it is.
+pub fn parse_bold(line: &str) -> Inline {
+    let mut out = Inline::default();
+    let mut rest = line;
+    while let Some(open) = rest.find("**") {
+        let after = &rest[open + 2..];
+        let Some(close) = after.find("**").filter(|&close| close > 0) else {
+            break;
+        };
+        out.text.push_str(&rest[..open]);
+        let start = out.text.len();
+        out.text.push_str(&after[..close]);
+        out.bold.push(start..out.text.len());
+        rest = &after[close + 2..];
+    }
+    out.text.push_str(rest);
+    out
+}
+
 /// `body` as blocks: `#` lines are headings, `- ` and `* ` lines bullets, blank lines gaps, the rest plain lines.
 pub fn notes_blocks(body: &str) -> Vec<NotesBlock> {
     body.lines()
@@ -131,9 +159,9 @@ pub fn notes_blocks(body: &str) -> Vec<NotesBlock> {
             } else if line.starts_with('#') {
                 NotesBlock::Heading(line.trim_start_matches('#').trim().to_owned())
             } else if let Some(item) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
-                NotesBlock::Bullet(item.trim().to_owned())
+                NotesBlock::Bullet(parse_bold(item.trim()))
             } else {
-                NotesBlock::Line(line.to_owned())
+                NotesBlock::Line(parse_bold(line))
             }
         })
         .collect()
@@ -262,13 +290,34 @@ mod tests {
                 Heading("New".into()),
                 Heading("Big".into()),
                 Heading("Small".into()),
-                Bullet("a".into()),
-                Bullet("b".into()),
-                Line("text".into()),
+                Bullet(parse_bold("a")),
+                Bullet(parse_bold("b")),
+                Line(parse_bold("text")),
                 Gap,
-                Line("<b>x</b>".into())
+                Line(parse_bold("<b>x</b>"))
             ]
         );
         assert!(notes_blocks("").is_empty());
+    }
+
+    #[test]
+    fn parse_bold_strips_pairs_and_records_ranges() {
+        let parsed = parse_bold("**Drag panes** - Drag a **pane** by its header");
+        assert_eq!(parsed.text, "Drag panes - Drag a pane by its header");
+        assert_eq!(parsed.bold, vec![0..10, 20..24]);
+    }
+
+    #[test]
+    fn parse_bold_keeps_unpaired_and_empty_markers() {
+        assert_eq!(parse_bold("a ** b").text, "a ** b");
+        assert!(parse_bold("a ** b").bold.is_empty());
+        assert_eq!(parse_bold("a **** b").text, "a **** b");
+        assert_eq!(parse_bold("**x** and **y").text, "x and **y");
+    }
+
+    #[test]
+    fn parse_bold_handles_non_ascii() {
+        let parsed = parse_bold("שלום **עולם**");
+        assert_eq!(&parsed.text[parsed.bold[0].clone()], "עולם");
     }
 }
