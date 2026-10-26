@@ -9,7 +9,7 @@ use protocol::message::{ContainerPlace, SessionState};
 use crate::session_tree::{Row, RowKind, Tone};
 use crate::settings::Settings;
 use crate::split_tree::{Axis, NodeId};
-use crate::theme_colors::ProjectColor;
+use crate::theme_colors::{ProjectColor, Tint};
 
 /// A shortcut whose hint a menu entry shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,7 +94,7 @@ pub enum MenuAction {
         /// The project root.
         root: PathBuf,
         /// The color, or `None` for the automatic one.
-        color: Option<ProjectColor>,
+        color: Option<Tint>,
     },
     /// Take over a session running outside Gantry.
     TakeOver {
@@ -149,7 +149,7 @@ pub struct MenuContext {
     pub favorite: bool,
     /// The project's color: `None` = project colors are off (no Color menu), `Some(None)` = automatic,
     /// `Some(Some(c))` = picked.
-    pub project_color: Option<Option<ProjectColor>>,
+    pub project_color: Option<Option<Tint>>,
 }
 
 impl MenuContext {
@@ -211,20 +211,20 @@ fn accented(label: &str, action: MenuAction) -> MenuItem {
 }
 
 /// "Color ▸": the eight swatches, then "Automatic color". `current` is the project's pick (`None` = automatic).
-fn color_menu(root: &Path, current: Option<ProjectColor>) -> MenuItem {
+fn color_menu(root: &Path, current: Option<Tint>) -> MenuItem {
     let mut items: Vec<MenuItem> = ProjectColor::ALL
         .into_iter()
         .map(|color| {
             let name = color.name();
             let label = format!("{}{}", name[..1].to_uppercase(), &name[1..]);
-            let action = MenuAction::SetProjectColor { root: root.to_path_buf(), color: Some(color) };
+            let action = MenuAction::SetProjectColor { root: root.to_path_buf(), color: Some(Tint::Palette(color)) };
             MenuItem::Entry(MenuEntry {
                 label,
                 shortcut: None,
                 accent: false,
                 action,
                 swatch: Some(color),
-                checked: current == Some(color),
+                checked: current == Some(Tint::Palette(color)),
             })
         })
         .collect();
@@ -980,7 +980,8 @@ mod tests {
 
     #[test]
     fn project_menu_has_color_submenu_when_on() {
-        let mut ctx = MenuContext { project_color: Some(Some(ProjectColor::Teal)), ..MenuContext::default() };
+        let mut ctx =
+            MenuContext { project_color: Some(Some(Tint::Palette(ProjectColor::Teal))), ..MenuContext::default() };
         let items = project_menu(Path::new("/r/app"), None, &ctx);
         let Some(MenuItem::Submenu { label, items: colors }) =
             items.iter().find(|i| matches!(i, MenuItem::Submenu { label, .. } if label == "Color"))
@@ -1012,10 +1013,10 @@ mod tests {
     fn the_context_reads_the_folders_color_from_settings() {
         let mut settings = Settings::default();
         assert_eq!(MenuContext::for_folder(&settings, Path::new("/r/app")).project_color, Some(None));
-        settings.project_colors.folders.insert("/r/app".into(), ProjectColor::Lime);
+        settings.project_colors.folders.insert("/r/app".into(), Tint::Palette(ProjectColor::Lime));
         assert_eq!(
             MenuContext::for_folder(&settings, Path::new("/r/app")).project_color,
-            Some(Some(ProjectColor::Lime))
+            Some(Some(Tint::Palette(ProjectColor::Lime)))
         );
         settings.project_colors.enabled = false;
         assert_eq!(MenuContext::for_folder(&settings, Path::new("/r/app")).project_color, None);

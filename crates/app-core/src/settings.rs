@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use crate::ssh_config::{validate_name, validate_target};
-use crate::theme_colors::ProjectColor;
+use crate::theme_colors::{ProjectColor, Tint};
 
 /// Theme choice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -431,7 +431,7 @@ pub struct ProjectColors {
     /// Whether projects get a color at all.
     pub enabled: bool,
     /// Project root to the color picked for it; others get the automatic color.
-    pub folders: BTreeMap<PathBuf, ProjectColor>,
+    pub folders: BTreeMap<PathBuf, Tint>,
 }
 
 impl Default for ProjectColors {
@@ -441,14 +441,14 @@ impl Default for ProjectColors {
 }
 
 /// The color of the project at `root`: its pick, else the automatic one; `None` when project colors are off.
-pub fn project_color(settings: &Settings, root: &Path) -> Option<ProjectColor> {
+pub fn project_color(settings: &Settings, root: &Path) -> Option<Tint> {
     settings.project_colors.color_of(root)
 }
 
 impl ProjectColors {
     /// The color of the project at `root`: its pick, else the automatic one; `None` when colors are off.
-    pub fn color_of(&self, root: &Path) -> Option<ProjectColor> {
-        self.enabled.then(|| self.folders.get(root).copied().unwrap_or_else(|| ProjectColor::auto(root)))
+    pub fn color_of(&self, root: &Path) -> Option<Tint> {
+        self.enabled.then(|| self.folders.get(root).copied().unwrap_or_else(|| Tint::Palette(ProjectColor::auto(root))))
     }
 }
 
@@ -960,13 +960,14 @@ impl Reader {
         let folders_map = self.object(&map, "projectColors.", "folders");
         let mut folders = BTreeMap::new();
         for (folder, value) in folders_map {
-            match value.as_str().and_then(ProjectColor::from_name) {
+            match value.as_str().and_then(Tint::parse) {
                 Some(color) => {
                     folders.insert(PathBuf::from(folder), color);
                 }
                 None => self.problem(
                     &format!("projectColors.folders.{folder}"),
-                    "expected a color name (blue, amber, teal, violet, rose, lime, orange, pink); dropped".into(),
+                    "expected a color name (blue, amber, teal, violet, rose, lime, orange, pink) or #rrggbb; dropped"
+                        .into(),
                 ),
             }
         }
@@ -1140,7 +1141,7 @@ fn leaves(settings: &Settings) -> Vec<(Vec<&'static str>, Value, bool)> {
         .project_colors
         .folders
         .iter()
-        .map(|(folder, color)| (folder.to_string_lossy().into_owned(), color.name().into()))
+        .map(|(folder, color)| (folder.to_string_lossy().into_owned(), color.to_setting().into()))
         .collect();
     add(&["projectColors", "folders"], Value::Object(colors), !settings.project_colors.folders.is_empty());
     add(&["animateWorking"], settings.animate_working.into(), settings.animate_working != default.animate_working);
@@ -1693,13 +1694,15 @@ mod tests {
 
     #[test]
     fn project_colors_load_tolerantly() {
-        let loaded =
-            parse(r#"{"projectColors": {"enabled": false, "folders": {"/a": "amber", "/b": "mauve", "/c": 3}}}"#);
+        let loaded = parse(
+            r##"{"projectColors": {"enabled": false, "folders": {"/a": "amber", "/b": "mauve", "/c": 3, "/d": "#a1b2c3", "/e": "#12"}}}"##,
+        );
         let s = loaded.settings.unwrap();
         assert!(!s.project_colors.enabled);
-        assert_eq!(s.project_colors.folders.get(Path::new("/a")), Some(&ProjectColor::Amber));
-        assert_eq!(s.project_colors.folders.len(), 1);
-        assert_eq!(loaded.problems.len(), 2, "{:?}", loaded.problems);
+        assert_eq!(s.project_colors.folders.get(Path::new("/a")), Some(&Tint::Palette(ProjectColor::Amber)));
+        assert_eq!(s.project_colors.folders.get(Path::new("/d")), Some(&Tint::Custom(0xa1b2c3)));
+        assert_eq!(s.project_colors.folders.len(), 2);
+        assert_eq!(loaded.problems.len(), 3, "{:?}", loaded.problems);
         let loaded = parse(r#"{"projectColors": {"folders": []}}"#);
         let s = loaded.settings.unwrap();
         assert!(s.project_colors.enabled && s.project_colors.folders.is_empty());
@@ -1710,9 +1713,9 @@ mod tests {
     fn project_color_resolves_pick_then_auto_then_off() {
         let mut s = Settings::default();
         let root = Path::new("/r/app");
-        assert_eq!(project_color(&s, root), Some(ProjectColor::auto(root)));
-        s.project_colors.folders.insert(root.into(), ProjectColor::Lime);
-        assert_eq!(project_color(&s, root), Some(ProjectColor::Lime));
+        assert_eq!(project_color(&s, root), Some(Tint::Palette(ProjectColor::auto(root))));
+        s.project_colors.folders.insert(root.into(), Tint::Palette(ProjectColor::Lime));
+        assert_eq!(project_color(&s, root), Some(Tint::Palette(ProjectColor::Lime)));
         s.project_colors.enabled = false;
         assert_eq!(project_color(&s, root), None);
     }
@@ -1728,10 +1731,12 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("mauve"), "a hand-written bad entry survives an unrelated save: {text}");
         assert!(!text.contains("enabled"), "enabled is written only when changed");
-        s.project_colors.folders.insert("/y".into(), ProjectColor::Teal);
+        s.project_colors.folders.insert("/y".into(), Tint::Palette(ProjectColor::Teal));
+        s.project_colors.folders.insert("/z".into(), Tint::Custom(0xa1b2c3));
         save(&path, &s, &loaded.raw).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"/y\": \"teal\""), "{text}");
+        assert!(text.contains("\"/z\": \"#a1b2c3\""), "{text}");
     }
 
     #[test]
