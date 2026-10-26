@@ -177,6 +177,57 @@ impl ProjectColor {
     }
 }
 
+/// A color the user picked: one of the eight palette colors, or any `#rrggbb`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Tint {
+    /// A palette color, with a value per preset.
+    Palette(ProjectColor),
+    /// A custom color, the same on every preset.
+    Custom(u32),
+}
+
+impl From<ProjectColor> for Tint {
+    fn from(color: ProjectColor) -> Tint {
+        Tint::Palette(color)
+    }
+}
+
+impl Tint {
+    /// The tint a setting names: a palette name (lower case) or `#rrggbb`.
+    pub fn parse(text: &str) -> Option<Tint> {
+        if text.starts_with('#') {
+            return parse_hex(text).map(Tint::Custom);
+        }
+        ProjectColor::from_name(text).map(Tint::Palette)
+    }
+
+    /// How it is saved: the palette name, or `#rrggbb` in lower case.
+    pub fn to_setting(self) -> String {
+        match self {
+            Tint::Palette(color) => color.name().to_string(),
+            Tint::Custom(rgb) => format!("#{rgb:06x}"),
+        }
+    }
+
+    /// Its value on `preset`'s surfaces.
+    pub fn value(self, preset: Preset) -> u32 {
+        match self {
+            Tint::Palette(color) => color.value(preset),
+            Tint::Custom(rgb) => rgb,
+        }
+    }
+}
+
+/// `#rrggbb` or `rrggbb` (any case, exactly six hex digits) as `0xRRGGBB`.
+pub fn parse_hex(text: &str) -> Option<u32> {
+    let digits = text.strip_prefix('#').unwrap_or(text);
+    if digits.len() == 6 && digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        u32::from_str_radix(digits, 16).ok()
+    } else {
+        None
+    }
+}
+
 fn default_tone_colors(preset: Preset, tone: Tone) -> ToneColors {
     let t = tokens(preset);
     let light = preset == Preset::MistLight;
@@ -520,5 +571,36 @@ mod tests {
         for preset in PRESETS {
             assert_eq!(Rgb::hex(tokens(preset).terminal), terminal_palette(preset).background, "{preset:?}");
         }
+    }
+    #[test]
+    fn tint_parses_names_and_hex() {
+        use super::{ProjectColor, Tint};
+        assert_eq!(Tint::parse("blue"), Some(Tint::Palette(ProjectColor::Blue)));
+        assert_eq!(Tint::parse("#5B9CF0"), Some(Tint::Custom(0x5b9cf0)));
+        assert_eq!(Tint::parse("#5b9cf0"), Some(Tint::Custom(0x5b9cf0)));
+        for bad in ["Blue", "#12", "#gggggg", "#5b9cf0ff", "5b9cf0", ""] {
+            assert_eq!(Tint::parse(bad), None, "{bad:?}");
+        }
+        assert_eq!(super::parse_hex("5B9CF0"), Some(0x5b9cf0));
+        assert_eq!(super::parse_hex("#5b9cf0"), Some(0x5b9cf0));
+        assert_eq!(super::parse_hex("#5b9cf"), None);
+    }
+
+    #[test]
+    fn tint_round_trips_as_setting() {
+        use super::{ProjectColor, Tint};
+        assert_eq!(Tint::Custom(0xAB12ef).to_setting(), "#ab12ef");
+        assert_eq!(Tint::Palette(ProjectColor::Teal).to_setting(), "teal");
+        for tint in [Tint::Custom(0x00ff10), Tint::Palette(ProjectColor::Pink)] {
+            assert_eq!(Tint::parse(&tint.to_setting()), Some(tint));
+        }
+    }
+
+    #[test]
+    fn tint_values() {
+        use super::{Preset, ProjectColor, Tint};
+        assert_eq!(Tint::Palette(ProjectColor::Blue).value(Preset::Mist), 0x5b9cf0);
+        assert_eq!(Tint::Custom(0x123456).value(Preset::MistLight), 0x123456);
+        assert_eq!(Tint::from(ProjectColor::Lime), Tint::Palette(ProjectColor::Lime));
     }
 }
