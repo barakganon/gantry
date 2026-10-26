@@ -28,7 +28,7 @@ use protocol::message::SessionInfo;
 use crate::context_menu::{self, OpenMenu};
 use crate::field;
 use crate::git_scrollbar::Extent;
-use crate::hover_card::{self, HoverCard, Lead, lead};
+use crate::hover_card::{self, HostsCard, HoverCard, Lead, lead};
 use crate::pane_drag::DraggedPane;
 use crate::settings_store::{SettingsStore, dir_badge_for, shortcut_label};
 use crate::theme::{
@@ -350,6 +350,17 @@ impl SidebarView {
                         .rounded_full()
                         .bg(rgb(crate::context_menu::host_dot_color(theme, summary.dot))),
                 )
+            })
+            .when(!open && summary.total > 0, |heading| {
+                heading.tooltip(hover_card::tooltip(HostsCard {
+                    hosts: self
+                        .hosts
+                        .iter()
+                        .map(|row| {
+                            (row.dot, row.host.name().to_string(), row.label.clone().unwrap_or("connected".into()))
+                        })
+                        .collect(),
+                }))
             })
             .on_click(cx.listener(|this, _, _, cx| {
                 let collapsed = this.hosts_fold.toggle();
