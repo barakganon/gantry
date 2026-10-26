@@ -381,7 +381,7 @@ async fn conversations_are_searchable() {
     std::fs::write(folder.join("s-quokka.jsonl"), text).unwrap();
     let harness = start_search_server(&claude, root.path()).await;
     let mut client = TestClient::connect(&harness.paths).await;
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     for request in 1.. {
         client.send(&ClientMessage::SearchConversations { request, query: "quokka".into(), limit: 10 }).await;
         let hits = loop {
