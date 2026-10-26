@@ -85,12 +85,28 @@ pub enum FailKind {
     },
 }
 
-/// With more SSH hosts than this the sidebar's SSH hosts block starts collapsed.
-pub const COLLAPSE_ABOVE: usize = 4;
+/// What the collapsed SSH hosts line shows: how many hosts are connected and one status dot for all of them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostsSummary {
+    /// Green when a host is connected, else amber when one is connecting or reconnecting, else none.
+    pub dot: HostDot,
+    /// How many hosts are connected.
+    pub connected: usize,
+    /// How many hosts are saved.
+    pub total: usize,
+}
 
-/// The heading of the sidebar's SSH hosts block: with many hosts it also says how many are connected.
-pub fn hosts_heading(connected: usize, total: usize) -> String {
-    if total > COLLAPSE_ABOVE { format!("SSH hosts · {connected} of {total} connected") } else { "SSH hosts".into() }
+/// Summarizes the dots of every saved host for the collapsed SSH hosts line.
+pub fn hosts_summary(dots: &[HostDot]) -> HostsSummary {
+    let connected = dots.iter().filter(|dot| **dot == HostDot::Ok).count();
+    let dot = if connected > 0 {
+        HostDot::Ok
+    } else if dots.contains(&HostDot::Busy) {
+        HostDot::Busy
+    } else {
+        HostDot::None
+    };
+    HostsSummary { dot, connected, total: dots.len() }
 }
 
 /// What the X of a host in the sidebar's SSH hosts block does.
@@ -138,7 +154,7 @@ impl HostState {
         !matches!(self, HostState::Connecting | HostState::Connected | HostState::Reconnecting { .. })
     }
 
-    /// Whether the host is connected or on its way: the sidebar block gives it an X, and keeps its row when collapsed.
+    /// Whether the host is connected or on its way: the sidebar block gives it an X.
     pub fn in_connected_list(&self) -> bool {
         matches!(self, HostState::Connecting | HostState::Connected | HostState::Reconnecting { .. })
     }
@@ -404,10 +420,40 @@ pub fn away_line(host: &str, state: &HostState) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn the_hosts_heading_counts_connected_hosts_only_above_four_hosts() {
-        assert_eq!(hosts_heading(1, 2), "SSH hosts");
-        assert_eq!(hosts_heading(0, COLLAPSE_ABOVE), "SSH hosts");
-        assert_eq!(hosts_heading(2, 6), "SSH hosts · 2 of 6 connected");
+    fn an_empty_host_list_summarizes_to_no_dot_and_zero_of_zero() {
+        assert_eq!(hosts_summary(&[]), HostsSummary { dot: HostDot::None, connected: 0, total: 0 });
+    }
+
+    #[test]
+    fn one_connected_host_makes_the_dot_ok() {
+        assert_eq!(
+            hosts_summary(&[HostDot::Ok, HostDot::None]),
+            HostsSummary { dot: HostDot::Ok, connected: 1, total: 2 }
+        );
+    }
+
+    #[test]
+    fn a_connecting_host_with_none_connected_is_busy() {
+        assert_eq!(
+            hosts_summary(&[HostDot::Busy, HostDot::None]),
+            HostsSummary { dot: HostDot::Busy, connected: 0, total: 2 }
+        );
+    }
+
+    #[test]
+    fn a_host_that_needs_the_user_or_failed_does_not_count_as_up() {
+        assert_eq!(
+            hosts_summary(&[HostDot::Warn, HostDot::Bad]),
+            HostsSummary { dot: HostDot::None, connected: 0, total: 2 }
+        );
+    }
+
+    #[test]
+    fn a_connected_host_beats_a_busy_one() {
+        assert_eq!(
+            hosts_summary(&[HostDot::Busy, HostDot::Ok]),
+            HostsSummary { dot: HostDot::Ok, connected: 1, total: 2 }
+        );
     }
 
     #[test]
