@@ -55,8 +55,10 @@ const TAB_INSET: f32 = 37.0;
 const MIN_RULE: f32 = 16.0;
 /// Width of the ring around the selected row.
 const RING: f32 = 2.0;
-/// Empty space between the ring and the selected row's fill.
+/// Empty space between the ring and the selected row's fill, besides `PILL_INSET`.
 const RING_GAP: f32 = 1.0;
+/// How far a row's fill is pulled in from its slot on every side; the ring stays where the slot puts it.
+const PILL_INSET: f32 = 2.0;
 /// Ages ("5m") and project roots are recomputed this often.
 const REFRESH: Duration = Duration::from_secs(30);
 
@@ -1004,9 +1006,9 @@ impl SidebarView {
             .flex_1()
             .min_h_0()
             .w_full()
-            .pl(theme.ui(SESSION_INSET))
-            .pr(theme.ui(HEADING_INSET))
-            .py(px(ROW_PAD_Y))
+            .pl(theme.ui(SESSION_INSET) + px(PILL_INSET))
+            .pr(theme.ui(HEADING_INSET) + px(PILL_INSET))
+            .py(px(ROW_PAD_Y + PILL_INSET))
             .flex()
             .flex_row()
             .items_center()
@@ -1097,7 +1099,8 @@ impl SidebarView {
         let guide = row
             .in_tab
             .then(|| div().absolute().left(theme.ui(30.)).top_0().bottom_0().w(px(2.)).bg(rgb(theme.tokens.line)));
-        let base = base.when(row.in_tab, |base| base.relative().pl(theme.ui(TAB_INSET))).children(guide);
+        let base =
+            base.when(row.in_tab, |base| base.relative().pl(theme.ui(TAB_INSET) + px(PILL_INSET))).children(guide);
         // A row that stands for a pane of the layout can be picked up and dropped on a pane or on the sidebar.
         let dragged_pane = match &row.kind {
             RowKind::Session { session, leaf: Some(leaf), .. } => {
@@ -1129,7 +1132,7 @@ impl SidebarView {
                 });
                 // The name starts further left than the sessions' bars, so the heading reads as their parent; the
                 // project dot and the fold chevron sit together at the right, joined to the name by a hairline.
-                base.pl(theme.ui(HEADING_INSET))
+                base.pl(theme.ui(HEADING_INSET) + px(PILL_INSET))
                     .on_drag(dragged, |dragged: &DraggedProject, _offset, _window, cx: &mut App| {
                         cx.new(|_| dragged.clone())
                     })
@@ -1499,56 +1502,64 @@ impl Render for SidebarView {
                         .border_color(rgb(theme.selection()))
                 });
                 this.child(
-                    div().relative().h(theme.ui(ROW_HEIGHT - 4.)).flex_none().mx_3().mb_1().children(ring).child(
-                        div()
-                            .id("settings-row")
-                            .size_full()
-                            .px(theme.ui(12.))
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .text_sm()
-                            .rounded(px(RADIUS))
-                            .bg(rgb(theme.tokens.text))
-                            .text_color(rgb(theme.tokens.ground))
-                            .cursor_pointer()
-                            .child("⚙")
-                            .child(div().flex_1().min_w_0().truncate().child("Settings"))
-                            .child(
-                                div()
-                                    .id("close-settings")
-                                    .flex_none()
-                                    .size(theme.ui(20.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded_full()
-                                    .text_xs()
-                                    .hover(|style| style.bg(rgba(0x00000026)))
-                                    .child("×")
-                                    .on_click(cx.listener(|_, _, _, cx| {
+                    div()
+                        .relative()
+                        .h(theme.ui(ROW_HEIGHT - 4.))
+                        .flex_none()
+                        .p(px(PILL_INSET))
+                        .mx_3()
+                        .mb_1()
+                        .children(ring)
+                        .child(
+                            div()
+                                .id("settings-row")
+                                .size_full()
+                                .px(theme.ui(12.))
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .text_sm()
+                                .rounded(px(RADIUS))
+                                .bg(rgb(theme.tokens.text))
+                                .text_color(rgb(theme.tokens.ground))
+                                .cursor_pointer()
+                                .child("⚙")
+                                .child(div().flex_1().min_w_0().truncate().child("Settings"))
+                                .child(
+                                    div()
+                                        .id("close-settings")
+                                        .flex_none()
+                                        .size(theme.ui(20.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_full()
+                                        .text_xs()
+                                        .hover(|style| style.bg(rgba(0x00000026)))
+                                        .child("×")
+                                        .on_click(cx.listener(|_, _, _, cx| {
+                                            cx.stop_propagation();
+                                            cx.emit(SidebarEvent::CloseSettings);
+                                        })),
+                                )
+                                .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::ShowSettings)))
+                                .on_mouse_down(
+                                    MouseButton::Middle,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.middle_pressed = Some(None);
                                         cx.stop_propagation();
-                                        cx.emit(SidebarEvent::CloseSettings);
-                                    })),
-                            )
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::ShowSettings)))
-                            .on_mouse_down(
-                                MouseButton::Middle,
-                                cx.listener(|this, _, _, cx| {
-                                    this.middle_pressed = Some(None);
-                                    cx.stop_propagation();
-                                }),
-                            )
-                            .on_mouse_up(
-                                MouseButton::Middle,
-                                cx.listener(|this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    if this.middle_pressed.take() == Some(None) {
-                                        cx.emit(SidebarEvent::CloseSettings);
-                                    }
-                                }),
-                            ),
-                    ),
+                                    }),
+                                )
+                                .on_mouse_up(
+                                    MouseButton::Middle,
+                                    cx.listener(|this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        if this.middle_pressed.take() == Some(None) {
+                                            cx.emit(SidebarEvent::CloseSettings);
+                                        }
+                                    }),
+                                ),
+                        ),
                 )
             })
             .when_some(self.git_row.clone(), |this, label| {
@@ -1558,6 +1569,7 @@ impl Render for SidebarView {
                         .relative()
                         .h(theme.ui(ROW_HEIGHT - 4.))
                         .flex_none()
+                        .p(px(PILL_INSET))
                         .mx_3()
                         .mb_1()
                         .child(
