@@ -19,6 +19,7 @@ use app_core::shortcuts::{self, Platform};
 
 use crate::assets::{CLOSE_ICON, POP_OUT_ICON, PROMPT_ICON, SPLIT_DOWN_ICON, SPLIT_RIGHT_ICON};
 use crate::context_menu::OpenMenu;
+use crate::field;
 use crate::hover_card::{self, HoverCard};
 use crate::launcher_view::{FolderRow, star};
 use crate::pane_drag::DraggedPane;
@@ -377,6 +378,23 @@ impl WorkspaceView {
                     None
                 };
                 let picked = self.sidebar.read(cx).picks(leaf).1;
+                // The pane's name being edited in place of its title.
+                let title_field =
+                    self.header_rename.as_ref().filter(|(editing, ..)| *editing == leaf).map(|(_, field, _)| {
+                        let press = field::on_press(cx, |this: &mut Self, offset, clicks, _, cx| {
+                            if let Some((_, field, _)) = &mut this.header_rename {
+                                field.press(offset, clicks);
+                            }
+                            cx.notify();
+                        });
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .track_focus(&self.header_rename_focus)
+                            .on_key_down(cx.listener(Self::header_rename_key))
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(field::render(field, "Name", true, &theme, press))
+                    });
                 let pick_pane = cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                     if event.modifiers.shift {
                         this.sidebar.update(cx, |sidebar, cx| sidebar.toggle_pick(Activation::FocusLeaf(leaf), cx));
@@ -458,9 +476,24 @@ impl WorkspaceView {
                                                     .on_mouse_down(MouseButton::Left, pick_pane)
                                                     .on_mouse_down(MouseButton::Right, pane_menu)
                                                     .child(pane_header(
-                                                        index, leaf, title, status, unseen, offline, animate,
-                                                        container, host, dir, folder, project, marker, git_chip,
-                                                        picked, pop_out, &theme,
+                                                        index,
+                                                        leaf,
+                                                        title,
+                                                        status,
+                                                        unseen,
+                                                        offline,
+                                                        animate,
+                                                        container,
+                                                        host,
+                                                        dir,
+                                                        folder,
+                                                        project,
+                                                        marker,
+                                                        git_chip,
+                                                        picked,
+                                                        pop_out,
+                                                        title_field,
+                                                        &theme,
                                                     )),
                                             )
                                         })
@@ -583,6 +616,7 @@ fn pane_header(
     git_chip: Option<gpui::Stateful<Div>>,
     picked: bool,
     pop_out: gpui::Stateful<Div>,
+    title_field: Option<Div>,
     theme: &Theme,
 ) -> impl IntoElement {
     let tone = leaf_tone(status.as_ref(), unseen, offline);
@@ -625,7 +659,7 @@ fn pane_header(
             header.child(pane_marker(color, if project.is_some() { 12. } else { 4. }, theme))
         })
         .children(pin)
-        .child(div().flex_1().min_w_0().truncate().child(title))
+        .child(title_field.unwrap_or_else(|| div().flex_1().min_w_0().truncate().child(title)))
         .children(git_chip)
         .when(container, |header| {
             header.child(container_icon(colors.map_or(theme.tokens.text, |colors| colors.ink), theme))
