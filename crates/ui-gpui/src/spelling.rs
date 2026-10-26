@@ -1,6 +1,10 @@
-//! Spell checking of the prompt line with the system spell checker (macOS); nothing elsewhere.
+//! Spell checking of the prompt line with the system spell checker (macOS; nothing elsewhere), and rephrasing with
+//! Claude.
 
+use std::io::Write;
 use std::ops::Range;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 /// The misspelled words of `text`, as char ranges.
 pub fn misspelled(text: &str) -> Vec<Range<usize>> {
@@ -15,6 +19,18 @@ pub fn guesses(text: &str, word: Range<usize>) -> Vec<String> {
 /// Stop flagging `word`, here and in every other app.
 pub fn learn(word: &str) {
     imp::learn(word);
+}
+
+/// `text` rewritten by Claude with `~/.local/bin/claude-rephrase` (stdin to stdout); `None` when that fails or is
+/// missing. Blocks for a few seconds.
+pub fn rephrase(text: &str) -> Option<String> {
+    let script = PathBuf::from(std::env::var_os("HOME")?).join(".local/bin/claude-rephrase");
+    let mut child =
+        Command::new(script).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    child.stdin.take()?.write_all(text.as_bytes()).ok()?;
+    let output = child.wait_with_output().ok()?;
+    let text = String::from_utf8(output.stdout).ok()?.trim_end().to_string();
+    (output.status.success() && !text.is_empty()).then_some(text)
 }
 
 /// A UTF-16 range of `text` (what the spell checker speaks) as a char range.

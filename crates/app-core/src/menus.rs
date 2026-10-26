@@ -113,6 +113,8 @@ pub enum MenuAction {
     ReplaceWord(String),
     /// Stop flagging this word.
     LearnWord(String),
+    /// Rewrite the prompt selection with Claude.
+    Rephrase,
     /// Take over a session running outside Gantry.
     TakeOver {
         /// Session id.
@@ -223,14 +225,23 @@ pub fn together_menu(count: usize) -> Vec<MenuItem> {
     vec![entry(&format!("Open {count} together"), MenuAction::OpenTogether)]
 }
 
-/// The menu of a misspelled word: its suggestions, then Learn Spelling.
-pub fn spelling_menu(word: &str, guesses: &[String]) -> Vec<MenuItem> {
-    let mut items: Vec<MenuItem> =
-        guesses.iter().take(6).map(|guess| entry(guess, MenuAction::ReplaceWord(guess.clone()))).collect();
-    if !items.is_empty() {
-        items.push(MenuItem::Separator);
+/// The right-click menu of the prompt line: a misspelled word's suggestions and Learn Spelling, then Rephrase when
+/// there is a selection.
+pub fn prompt_menu(misspelled: Option<(&str, &[String])>, rephrase: bool) -> Vec<MenuItem> {
+    let mut items = Vec::new();
+    if let Some((word, guesses)) = misspelled {
+        items.extend(guesses.iter().take(6).map(|guess| entry(guess, MenuAction::ReplaceWord(guess.clone()))));
+        if !items.is_empty() {
+            items.push(MenuItem::Separator);
+        }
+        items.push(entry("Learn Spelling", MenuAction::LearnWord(word.into())));
     }
-    items.push(entry("Learn Spelling", MenuAction::LearnWord(word.into())));
+    if rephrase {
+        if !items.is_empty() {
+            items.push(MenuItem::Separator);
+        }
+        items.push(entry("Rephrase with Claude", MenuAction::Rephrase));
+    }
     items
 }
 
@@ -1138,7 +1149,7 @@ mod tests {
     }
 
     #[test]
-    fn a_spelling_menu_offers_guesses_then_learn() {
+    fn a_prompt_menu_offers_guesses_learn_then_rephrase() {
         let labels = |items: Vec<MenuItem>| -> Vec<String> {
             items
                 .into_iter()
@@ -1148,8 +1159,12 @@ mod tests {
                 })
                 .collect()
         };
-        assert_eq!(labels(spelling_menu("teh", &["the".into(), "ten".into()])), ["the", "ten", "-", "Learn Spelling"]);
-        assert_eq!(labels(spelling_menu("qbz", &[])), ["Learn Spelling"]);
+        let guesses = ["the".to_string(), "ten".to_string()];
+        assert_eq!(labels(prompt_menu(Some(("teh", &guesses)), false)), ["the", "ten", "-", "Learn Spelling"]);
+        assert_eq!(labels(prompt_menu(Some(("qbz", &[])), false)), ["Learn Spelling"]);
+        assert_eq!(labels(prompt_menu(Some(("qbz", &[])), true)), ["Learn Spelling", "-", "Rephrase with Claude"]);
+        assert_eq!(labels(prompt_menu(None, true)), ["Rephrase with Claude"]);
+        assert!(prompt_menu(None, false).is_empty());
     }
 
     #[test]

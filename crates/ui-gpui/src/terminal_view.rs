@@ -264,8 +264,10 @@ pub struct TerminalView {
     hovered_link: Option<(u16, Range<usize>)>,
     /// Misspelled words of prompt rows, by row text, so a redraw does not ask the spell checker again.
     spell_cache: Vec<(String, Vec<Range<usize>>)>,
-    /// The open menu of a right-clicked misspelled word, and the word's row and columns.
+    /// The open right-click menu of the prompt line, and the misspelled word's row and columns it was opened on.
     spell_menu: Option<(OpenMenu, u16, Range<usize>)>,
+    /// A rewrite of the prompt selection Claude is working on.
+    rephrase: Option<Task<()>>,
     /// Display order of each viewport row in the last frame (`None`: drawn as stored).
     row_orders: Vec<Option<RowOrder>>,
     /// Input typed while Starting, sent on attach.
@@ -317,6 +319,7 @@ impl TerminalView {
             hovered_link: None,
             spell_cache: Vec::new(),
             spell_menu: None,
+            rephrase: None,
             row_orders: Vec::new(),
             held_input: Vec::new(),
             host_card: None,
@@ -678,22 +681,46 @@ impl TerminalView {
         words
     }
 
-    /// Right-click on a misspelled prompt word opens its suggestions. False when the click is not on one.
+    /// Right-click on the prompt line of a Claude pane: a misspelled word's suggestions, and Rephrase for a selection.
+    /// False when there is nothing to offer.
     fn open_spell_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some((col, row, _)) = self.logical_cell_at(position) else { return false };
-        let Some((_, cols)) =
-            self.misspelled_words().into_iter().find(|(at, cols)| *at == row && cols.contains(&(col as usize)))
-        else {
-            return false;
+        let word = self.misspelled_words().into_iter().find(|(at, cols)| *at == row && cols.contains(&(col as usize)));
+        let rephrase =
+            self.launch.is_claude() && self.rephrase.is_none() && self.term.prompt_selection_edit().is_some();
+        let (text, cols) = match &word {
+            Some((_, cols)) => (self.term.row_text(row), cols.clone()),
+            None => (String::new(), 0..0),
         };
-        let text = self.term.row_text(row);
-        let word: String = text.chars().skip(cols.start).take(cols.len()).collect();
-        let items = menus::spelling_menu(&word, &spelling::guesses(&text, cols.clone()));
+        let spelled: String = text.chars().skip(cols.start).take(cols.len()).collect();
+        let guesses = word.as_ref().map(|_| spelling::guesses(&text, cols.clone())).unwrap_or_default();
+        let items = menus::prompt_menu(word.as_ref().map(|_| (spelled.as_str(), guesses.as_slice())), rephrase);
+        if items.is_empty() {
+            return false;
+        }
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         self.spell_menu = Some((OpenMenu::new(items, position, focus), row, cols));
         cx.notify();
         true
+    }
+
+    /// Rewrite the prompt selection with Claude; the rewrite takes its place if the selection is still the same.
+    fn rephrase_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(original) = self.term.selection_text() else { return };
+        self.rephrase = Some(cx.spawn(async move |this, cx| {
+            let input = original.clone();
+            let rewrite = cx.background_executor().spawn(async move { spelling::rephrase(&input) }).await;
+            let _ = this.update(cx, |this, cx| {
+                this.rephrase = None;
+                if let Some(rewrite) = rewrite
+                    && this.term.selection_text().as_deref() == Some(original.as_str())
+                {
+                    this.paste_text(&rewrite, cx);
+                }
+                cx.notify();
+            });
+        }));
     }
 
     fn spell_pick(&mut self, action: &MenuAction, window: &mut Window, cx: &mut Context<Self>) {
@@ -711,6 +738,7 @@ impl TerminalView {
                 spelling::learn(word);
                 self.spell_cache.clear();
             }
+            MenuAction::Rephrase => self.rephrase_selection(cx),
             _ => {}
         }
         cx.notify();
