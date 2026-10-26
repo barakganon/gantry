@@ -533,6 +533,11 @@ impl WorkspaceView {
         self.ssh_hosts.iter().any(|entry| entry.name == host.name()) && !self.host_state(host).in_connected_list()
     }
 
+    /// The leaves of hosts that are away: their tabs are passed by when switching tabs, like the sidebar does.
+    pub(super) fn away_leaves(&self) -> HashSet<NodeId> {
+        self.workspace.leaves.iter().filter(|(_, leaf)| self.is_away(&leaf.host)).map(|(id, _)| *id).collect()
+    }
+
     /// The × of `host` in the sidebar's Connected block: cancels a connection that is not up, stops an idle host's
     /// daemon, and asks Detach / Close all sessions / Cancel when sessions run there.
     pub(super) fn disconnect_host(&mut self, host: &HostId, window: &mut Window, cx: &mut Context<Self>) {
