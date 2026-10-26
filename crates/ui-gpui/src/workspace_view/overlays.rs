@@ -208,8 +208,9 @@ impl WorkspaceView {
             let DialogEvent::Chosen(index) = event;
             this.on_dialog_chosen(*index, window, cx)
         });
+        let restore = window.focused(cx);
         view.focus_handle(cx).focus(window, cx);
-        self.dialog = Some(OpenDialog { view, action, _subscription });
+        self.dialog = Some(OpenDialog { view, action, restore, _subscription });
         cx.notify();
         true
     }
@@ -217,7 +218,10 @@ impl WorkspaceView {
     /// The dialog was answered: close it, give the focus back and run what the choice asks.
     fn on_dialog_chosen(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(open) = self.dialog.take() else { return };
-        self.focus_current(window, cx);
+        match &open.restore {
+            Some(handle) => handle.focus(window, cx),
+            None => self.focus_current(window, cx),
+        }
         cx.notify();
         match open.action {
             DialogAction::Quit => match index {

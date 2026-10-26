@@ -250,7 +250,7 @@ fn install_quit_prompt(window: WindowHandle<WorkspaceView>, cx: &mut App) {
     });
 }
 
-/// Closing the window asks: Detach (sessions keep running) / Stop all sessions / Cancel.
+/// Closing the window asks: Keep sessions running / Stop all and quit / Cancel.
 fn install_should_close(window: &mut Window, cx: &mut App, view: gpui::Entity<WorkspaceView>) {
     window.on_window_should_close(cx, move |window, cx| view.update(cx, |view, cx| view.request_quit(window, cx)));
 }

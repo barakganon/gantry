@@ -104,25 +104,37 @@ impl WorkspaceView {
     ) {
         let waiting = (host.clone(), session.clone());
         match outcome {
-            TakeOverOutcome::Exited => match self.take_overs.remove(&waiting) {
-                Some(TakeOverTarget::NewPane { cwd, split, container }) => {
-                    let axis = (split && self.workspace.can_split()).then_some(Axis::Horizontal);
-                    let launch = self.resume_launch(&host, &session, cwd, container, cx);
-                    self.open_launch(launch, axis, None, host, window, cx);
+            TakeOverOutcome::Exited => {
+                if matches!(&self.dialog, Some(open) if matches!(&open.action, DialogAction::ForceQuit { waiting: asked } if *asked == waiting))
+                {
+                    // The session is gone: Force quit has nothing left to act on.
+                    self.dialog = None;
+                    self.focus_current(window, cx);
                 }
-                Some(TakeOverTarget::Leaf(leaf)) => {
-                    let session_dir =
-                        self.sidebar.read(cx).sessions().get(&host, &session).and_then(|info| info.claude_dir.clone());
-                    let launch = self.workspace.leaves.get(&leaf).map(|entry| {
-                        entry.rerun_resolved(true, session_dir.as_deref(), &self.dirs, self.daemon_dir.as_deref())
-                    });
-                    if let Some(launch) = launch {
-                        self.start_leaf(leaf, launch, window, cx);
-                        self.focus_leaf(leaf, window, cx);
+                match self.take_overs.remove(&waiting) {
+                    Some(TakeOverTarget::NewPane { cwd, split, container }) => {
+                        let axis = (split && self.workspace.can_split()).then_some(Axis::Horizontal);
+                        let launch = self.resume_launch(&host, &session, cwd, container, cx);
+                        self.open_launch(launch, axis, None, host, window, cx);
                     }
+                    Some(TakeOverTarget::Leaf(leaf)) => {
+                        let session_dir = self
+                            .sidebar
+                            .read(cx)
+                            .sessions()
+                            .get(&host, &session)
+                            .and_then(|info| info.claude_dir.clone());
+                        let launch = self.workspace.leaves.get(&leaf).map(|entry| {
+                            entry.rerun_resolved(true, session_dir.as_deref(), &self.dirs, self.daemon_dir.as_deref())
+                        });
+                        if let Some(launch) = launch {
+                            self.start_leaf(leaf, launch, window, cx);
+                            self.focus_leaf(leaf, window, cx);
+                        }
+                    }
+                    None => {}
                 }
-                None => {}
-            },
+            }
             TakeOverOutcome::StillRunning => {
                 if !self.take_overs.contains_key(&waiting) {
                     return;

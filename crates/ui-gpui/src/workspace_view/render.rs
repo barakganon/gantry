@@ -263,9 +263,6 @@ impl Render for WorkspaceView {
                         .child(view),
                 )
             })
-            .when_some(self.dialog.as_ref().map(|open| open.view.clone()), |root, view| {
-                root.child(dialog_overlay(view, &theme, fade))
-            })
             .when_some(self.color_picker.as_ref().map(|(view, _)| view.clone()), |root, view| {
                 let dismiss = view.clone();
                 root.child(
@@ -419,6 +416,10 @@ impl Render for WorkspaceView {
                     move |action, window, cx| pick(action, window, cx),
                     move |window, cx| dismiss(&(), window, cx),
                 ))
+            })
+            // Last, so nothing above the workspace draws over its scrim.
+            .when_some(self.dialog.as_ref().map(|open| open.view.clone()), |root, view| {
+                root.child(dialog_overlay(view, &theme, fade))
             });
         window_frame::frame(window, theme.tokens.line, root)
     }

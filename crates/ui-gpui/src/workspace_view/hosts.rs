@@ -554,7 +554,7 @@ impl WorkspaceView {
     }
 
     /// The × of `host` in the sidebar's Connected block: cancels a connection that is not up, stops an idle host's
-    /// daemon, and asks Detach / Close all sessions / Cancel when sessions run there.
+    /// daemon, and asks Disconnect only / End sessions and disconnect / Cancel when sessions run there.
     pub(super) fn disconnect_host(&mut self, host: &HostId, window: &mut Window, cx: &mut Context<Self>) {
         let leaves: Vec<NodeId> =
             self.workspace.leaves.iter().filter(|(_, leaf)| leaf.host == *host).map(|(id, _)| *id).collect();

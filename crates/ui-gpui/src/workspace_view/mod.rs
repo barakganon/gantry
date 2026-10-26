@@ -138,6 +138,8 @@ pub(super) struct DevContainerOpen {
 pub(super) struct OpenDialog {
     view: Entity<DialogView>,
     action: DialogAction,
+    /// What had the focus when it opened (the launcher, say), given back when it closes.
+    restore: Option<FocusHandle>,
     _subscription: Subscription,
 }
 
