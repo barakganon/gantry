@@ -103,6 +103,10 @@ pub enum MenuAction {
     CustomColor(ColorTarget),
     /// Open the sessions picked with Shift-click side by side, four to a tab.
     OpenTogether,
+    /// Add a pane to the picks to open together, or take it out.
+    TogglePick(NodeId),
+    /// Make a pane of a split tab a tab of its own; it keeps running.
+    PullOut(NodeId),
     /// Take over a session running outside Gantry.
     TakeOver {
         /// Session id.
@@ -191,6 +195,20 @@ impl MenuContext {
             pane_color: None,
         }
     }
+}
+
+/// The right-click menu of a split pane's header; `picks` counts the picks to open together.
+pub fn pane_menu(leaf: NodeId, picked: bool, picks: usize) -> Vec<MenuItem> {
+    let mut items = vec![
+        entry("Move to own tab", MenuAction::PullOut(leaf)),
+        entry(if picked { "Remove from Open together" } else { "Add to Open together" }, MenuAction::TogglePick(leaf)),
+    ];
+    if picks > 1 {
+        items.push(entry(&format!("Open {picks} together"), MenuAction::OpenTogether));
+    }
+    items.push(entry("Rename pane", MenuAction::RenamePane(leaf)));
+    items.push(with_shortcut("Close pane", Shortcut::Close, MenuAction::ClosePane(leaf)));
+    items
 }
 
 /// The menu of a row among several picked with Shift-click.

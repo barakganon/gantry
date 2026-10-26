@@ -8,7 +8,7 @@ use protocol::message::SessionState;
 
 use app_core::menus::{self, MenuAction, MenuContext, MenuEntry, MenuItem, Shortcut};
 use app_core::session_tree::{Activation, Tone, Unseen, status_tone};
-use app_core::split_tree::DropZone;
+use app_core::split_tree::{DropZone, NodeId};
 use app_core::workspace::{MAX_PANES_PER_TAB, grid_slot};
 
 use crate::context_menu::OpenMenu;
@@ -127,6 +127,10 @@ impl WorkspaceView {
                 self.rerun_leaf(leaf, window, cx);
             }
             MenuAction::OpenTogether => self.open_together(window, cx),
+            MenuAction::TogglePick(leaf) => {
+                self.sidebar.update(cx, |sidebar, cx| sidebar.toggle_pick(Activation::FocusLeaf(leaf), cx));
+            }
+            MenuAction::PullOut(leaf) => self.on_sidebar_event(SidebarEvent::PullOut(leaf), window, cx),
             MenuAction::TakeOver { session, cwd, host } => self.on_sidebar_event(
                 SidebarEvent::Activate { activation: Activation::TakeOver { session, cwd, host }, split: false },
                 window,
@@ -158,6 +162,21 @@ impl WorkspaceView {
     }
 
     /// Open tab `index`'s right-click menu at `position` (it acts on that tab, not the visible one).
+    /// The right-click menu of a split pane's header.
+    pub(super) fn open_header_menu(
+        &mut self,
+        leaf: NodeId,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (picks, picked) = self.sidebar.read(cx).picks(leaf);
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
+        self.tab_menu = Some(OpenMenu::new(menus::pane_menu(leaf, picked, picks), position, focus));
+        cx.notify();
+    }
+
     pub(super) fn open_tab_menu(
         &mut self,
         index: usize,
@@ -245,6 +264,7 @@ impl WorkspaceView {
                 }
             }
             SidebarEvent::CloseGit => self.close_git_page(window, cx),
+            SidebarEvent::PicksChanged => cx.notify(),
             SidebarEvent::TabMenu { index, position } => self.open_tab_menu(index, position, window, cx),
             SidebarEvent::New { claude } => self.show_launcher(claude, window, cx),
             SidebarEvent::PullOut(leaf) => {

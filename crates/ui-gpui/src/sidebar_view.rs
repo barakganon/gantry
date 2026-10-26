@@ -74,6 +74,8 @@ pub enum RenameTarget {
 /// What the sidebar asks the workspace to do.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SidebarEvent {
+    /// The picks to open together changed.
+    PicksChanged,
     /// Focus or resume what a row stands for; `split` = as a split of the focused pane.
     Activate {
         /// What to do.
@@ -176,8 +178,8 @@ pub struct SidebarView {
     all_rows: Vec<Row>,
     rows: Vec<Row>,
     selected: Option<RowKey>,
-    /// Rows picked with Shift-click to open together, in pick order.
-    together: Vec<RowKey>,
+    /// Picked with Shift-click to open together, in pick order: open panes as `FocusLeaf`, closed sessions as `Resume`.
+    together: Vec<Activation>,
     /// The workspace's focused leaf; its row is selected unless the user moved the ring.
     focused_leaf: Option<NodeId>,
     /// The open right-click menu of a row or heading.
@@ -266,31 +268,40 @@ impl SidebarView {
         self.roots.of(host, cwd)
     }
 
-    /// What the rows picked with Shift-click stand for, in pick order, clearing the pick. Rows gone since are skipped.
+    /// The picks to open together, in pick order, clearing them.
     pub fn take_together(&mut self, cx: &mut Context<Self>) -> Vec<Activation> {
-        let keys = std::mem::take(&mut self.together);
-        cx.notify();
-        keys.iter()
-            .filter_map(|key| session_tree::find(&self.rows, key))
-            .map(|index| self.rows[index].activation())
-            .collect()
+        cx.emit(SidebarEvent::PicksChanged);
+        std::mem::take(&mut self.together)
     }
 
-    /// Add or remove a session or pane row from the rows to open together.
-    fn toggle_together(&mut self, index: usize, cx: &mut Context<Self>) {
-        let row = &self.rows[index];
-        if !matches!(row.activation(), Activation::Resume { .. } | Activation::FocusPane(_) | Activation::FocusLeaf(_))
-        {
-            return;
-        }
-        let key = row.key();
-        match self.together.iter().position(|picked| *picked == key) {
+    /// How many picks there are, and whether `leaf` is one.
+    pub fn picks(&self, leaf: NodeId) -> (usize, bool) {
+        (self.together.len(), self.together.contains(&Activation::FocusLeaf(leaf)))
+    }
+
+    /// Add `pick` to the picks to open together, or take it out.
+    pub fn toggle_pick(&mut self, pick: Activation, cx: &mut Context<Self>) {
+        match self.together.iter().position(|picked| *picked == pick) {
             Some(at) => {
                 self.together.remove(at);
             }
-            None => self.together.push(key),
+            None => self.together.push(pick),
         }
+        cx.emit(SidebarEvent::PicksChanged);
         cx.notify();
+    }
+
+    /// What picking `row` adds: its pane, or the closed session to resume.
+    fn pick_of(row: &Row) -> Option<Activation> {
+        match &row.kind {
+            RowKind::Session { leaf: Some(leaf), .. } => Some(Activation::FocusLeaf(*leaf)),
+            RowKind::Pane { entry, .. } => Some(Activation::FocusLeaf(entry.leaf)),
+            _ => Some(row.activation()).filter(|activation| matches!(activation, Activation::Resume { .. })),
+        }
+    }
+
+    fn is_picked(&self, row: &Row) -> bool {
+        Self::pick_of(row).is_some_and(|pick| self.together.contains(&pick))
     }
 
     /// Every Gantry leaf in sidebar order, whatever the filter or collapsed projects hide.
@@ -739,6 +750,7 @@ impl SidebarView {
             "enter" if !self.together.is_empty() => cx.emit(SidebarEvent::Menu(MenuAction::OpenTogether)),
             "escape" if !self.together.is_empty() => {
                 self.together.clear();
+                cx.emit(SidebarEvent::PicksChanged);
                 cx.notify();
             }
             "enter" => {
@@ -808,9 +820,7 @@ impl SidebarView {
             .map(|pane| (pane.leaf, pane.color));
         let alone = |leaf: NodeId| self.panes.iter().find(|pane| pane.leaf == leaf).is_none_or(|pane| pane.alone);
         let items = match &row.kind {
-            _ if self.together.len() > 1 && self.together.contains(&row.key()) => {
-                Some(menus::together_menu(self.together.len()))
-            }
+            _ if self.together.len() > 1 && self.is_picked(row) => Some(menus::together_menu(self.together.len())),
             RowKind::Project { path, .. } => {
                 // The dev container one of its listed sessions runs in.
                 let container = self.rows[index + 1..]
@@ -1063,7 +1073,9 @@ impl SidebarView {
                 // clicked, by identity, or on nothing if it is gone.
                 if let Some(index) = session_tree::find(&this.rows, &key) {
                     if event.modifiers().shift {
-                        this.toggle_together(index, cx);
+                        if let Some(pick) = Self::pick_of(&this.rows[index]) {
+                            this.toggle_pick(pick, cx);
+                        }
                     } else {
                         this.activate(index, event.modifiers().secondary(), cx);
                     }
@@ -1148,9 +1160,8 @@ impl SidebarView {
             .then(|| div().absolute().left(theme.ui(30.)).top_0().bottom_0().w(px(2.)).bg(rgb(theme.tokens.line)));
         let base =
             base.when(row.in_tab, |base| base.relative().pl(theme.ui(TAB_INSET) + px(PILL_INSET))).children(guide);
-        let base = base.when(self.together.contains(&row.key()), |base| {
-            base.rounded(px(RADIUS)).bg(rgba((theme.tokens.accent << 8) | 0x2e))
-        });
+        let base =
+            base.when(self.is_picked(row), |base| base.rounded(px(RADIUS)).bg(rgba((theme.tokens.accent << 8) | 0x2e)));
         // A row that stands for a pane of the layout can be picked up and dropped on a pane or on the sidebar.
         let dragged_pane = match &row.kind {
             RowKind::Session { session, leaf: Some(leaf), .. } => {

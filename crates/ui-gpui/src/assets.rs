@@ -19,6 +19,9 @@ pub(crate) const SPLIT_DOWN_ICON: &str = "icons/split-down.svg";
 /// The close pane button's icon (an X).
 pub(crate) const CLOSE_ICON: &str = "icons/close.svg";
 
+/// The pane header's move-to-own-tab button icon (a box with an arrow out).
+pub(crate) const POP_OUT_ICON: &str = "icons/pop-out.svg";
+
 /// The jump to bottom chip's icon (an arrow pointing down), drawn by `terminal_view`.
 pub(crate) const ARROW_DOWN_ICON: &str = "icons/arrow-down.svg";
 
@@ -54,6 +57,7 @@ impl AssetSource for Assets {
             SPLIT_RIGHT_ICON => Some(include_bytes!("../assets/icons/split-right.svg")),
             SPLIT_DOWN_ICON => Some(include_bytes!("../assets/icons/split-down.svg")),
             CLOSE_ICON => Some(include_bytes!("../assets/icons/close.svg")),
+            POP_OUT_ICON => Some(include_bytes!("../assets/icons/pop-out.svg")),
             ARROW_DOWN_ICON => Some(include_bytes!("../assets/icons/arrow-down.svg")),
             CHEVRON_DOWN_ICON => Some(include_bytes!("../assets/icons/chevron-down.svg")),
             CHEVRON_RIGHT_ICON => Some(include_bytes!("../assets/icons/chevron-right.svg")),
@@ -74,6 +78,7 @@ impl AssetSource for Assets {
             SPLIT_RIGHT_ICON.into(),
             SPLIT_DOWN_ICON.into(),
             CLOSE_ICON.into(),
+            POP_OUT_ICON.into(),
             ARROW_DOWN_ICON.into(),
             CHEVRON_DOWN_ICON.into(),
             CHEVRON_RIGHT_ICON.into(),
@@ -97,6 +102,7 @@ mod tests {
             SPLIT_RIGHT_ICON,
             SPLIT_DOWN_ICON,
             CLOSE_ICON,
+            POP_OUT_ICON,
             ARROW_DOWN_ICON,
             CHEVRON_DOWN_ICON,
             CHEVRON_RIGHT_ICON,

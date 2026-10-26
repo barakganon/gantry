@@ -14,15 +14,16 @@ use protocol::host::HostId;
 use protocol::message::SessionStatus;
 
 use app_core::menus::{self, MenuAction, MenuEntry, MenuItem};
-use app_core::session_tree::{Tone, Unseen, display_path, leaf_tone, status_tone, tone_word};
+use app_core::session_tree::{Activation, Tone, Unseen, display_path, leaf_tone, status_tone, tone_word};
 use app_core::shortcuts::{self, Platform};
 
-use crate::assets::{CLOSE_ICON, PROMPT_ICON, SPLIT_DOWN_ICON, SPLIT_RIGHT_ICON};
+use crate::assets::{CLOSE_ICON, POP_OUT_ICON, PROMPT_ICON, SPLIT_DOWN_ICON, SPLIT_RIGHT_ICON};
 use crate::context_menu::OpenMenu;
 use crate::hover_card::{self, HoverCard};
 use crate::launcher_view::{FolderRow, star};
 use crate::pane_drag::DraggedPane;
 use crate::settings_store::SettingsStore;
+use crate::sidebar_view::SidebarEvent;
 use crate::theme::{
     RADIUS, RADIUS_LARGE, RADIUS_SMALL, Theme, container_icon, dir_badge, pane_marker, pin_icon, side_line, ssh_icon,
     sweeping, theme, working_sweep,
@@ -381,6 +382,28 @@ impl WorkspaceView {
                 } else {
                     None
                 };
+                let picked = self.sidebar.read(cx).picks(leaf).1;
+                let pick_pane = cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    if event.modifiers.shift {
+                        this.sidebar.update(cx, |sidebar, cx| sidebar.toggle_pick(Activation::FocusLeaf(leaf), cx));
+                        cx.stop_propagation();
+                    }
+                });
+                let pane_menu = cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.open_header_menu(leaf, event.position, window, cx);
+                    window.prevent_default();
+                    cx.stop_propagation();
+                });
+                // Takes the pane out of this tab into its own, still running.
+                let pop_out = div()
+                    .id(("pane-pop-out", index))
+                    .flex_none()
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.on_sidebar_event(SidebarEvent::PullOut(leaf), window, cx);
+                    }))
+                    .child(svg().path(POP_OUT_ICON).size(theme.ui(12.)).text_color(rgb(theme.tokens.muted)));
                 // While a pane is being dragged, an overlay takes the pointer from the terminal and tracks the drop.
                 let overlay = dragging_pane.then(|| {
                     div()
@@ -434,10 +457,18 @@ impl WorkspaceView {
                                     };
                                     content
                                         .when(multiple, |pane| {
-                                            pane.child(pane_header(
-                                                index, leaf, title, status, unseen, offline, animate, container, host,
-                                                dir, folder, project, marker, git_chip, &theme,
-                                            ))
+                                            pane.child(
+                                                div()
+                                                    .id(("pane-header-actions", index))
+                                                    // Shift-click picks the pane to open together.
+                                                    .on_mouse_down(MouseButton::Left, pick_pane)
+                                                    .on_mouse_down(MouseButton::Right, pane_menu)
+                                                    .child(pane_header(
+                                                        index, leaf, title, status, unseen, offline, animate,
+                                                        container, host, dir, folder, project, marker, git_chip,
+                                                        picked, pop_out, &theme,
+                                                    )),
+                                            )
                                         })
                                         .when_some(last_prompt, |pane, text| {
                                             pane.child(prompt_card(
@@ -556,6 +587,8 @@ fn pane_header(
     project: Option<u32>,
     marker: Option<u32>,
     git_chip: Option<gpui::Stateful<Div>>,
+    picked: bool,
+    pop_out: gpui::Stateful<Div>,
     theme: &Theme,
 ) -> impl IntoElement {
     let tone = leaf_tone(status.as_ref(), unseen, offline);
@@ -607,4 +640,6 @@ fn pane_header(
             header.child(ssh_icon(colors.map_or(theme.tokens.text, |colors| colors.ink), theme))
         })
         .children(dir.map(|badge| dir_badge(&badge, theme)))
+        .child(pop_out)
+        .when(picked, |header| header.border_1().border_color(rgb(theme.tokens.accent)))
 }
