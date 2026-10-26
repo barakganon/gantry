@@ -310,7 +310,9 @@ impl SidebarView {
     /// is the heading with the number of connected hosts and one status dot.
     fn render_hosts(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         let open = !self.hosts_fold.collapsed();
-        let summary = hosts_summary(&self.hosts.iter().map(|row| row.dot).collect::<Vec<_>>());
+        // A connected host being updated shows the Busy dot on its row but still counts as connected.
+        let summary_dot = |row: &HostRow| if row.up && row.label.is_none() { HostDot::Ok } else { row.dot };
+        let summary = hosts_summary(&self.hosts.iter().map(summary_dot).collect::<Vec<_>>());
         let pill_color = if summary.connected > 0 { theme.tokens.accent } else { theme.tokens.muted };
         let heading = div()
             .id("ssh-hosts-heading")
@@ -357,7 +359,11 @@ impl SidebarView {
                         .hosts
                         .iter()
                         .map(|row| {
-                            (row.dot, row.host.name().to_string(), row.label.clone().unwrap_or("connected".into()))
+                            (
+                                summary_dot(row),
+                                row.host.name().to_string(),
+                                row.label.clone().unwrap_or("connected".into()),
+                            )
                         })
                         .collect(),
                 }))
@@ -381,84 +387,90 @@ impl SidebarView {
             .rounded(px(RADIUS))
             .bg(rgba((theme.tokens.raised << 8) | 0x80))
             .child(heading)
-            .children(self.hosts.iter().enumerate().filter(|_| open).map(|(index, row)| {
-                let host = row.host.clone();
-                let dot = div()
-                    .flex_none()
-                    .size(px(7.))
-                    .rounded_full()
-                    .bg(rgb(crate::context_menu::host_dot_color(theme, row.dot)));
-                let name_color = if row.up { theme.tokens.text } else { theme.tokens.muted };
-                let name = div().flex_1().truncate().text_color(rgb(name_color)).child(host.name().to_string());
-                let label = row.label.clone().map(|label| div().text_color(rgb(theme.tokens.muted)).child(label));
-                if row.up {
-                    let update = row.update.clone().filter(|_| !row.updating).map(|text| {
-                        let host = host.clone();
-                        div()
-                            .id(("update-host", index))
-                            .flex_none()
-                            .h(theme.ui(18.))
-                            .px(theme.ui(7.))
-                            .flex()
-                            .items_center()
-                            .rounded_full()
-                            .border_1()
-                            .border_color(rgb(theme.tokens.accent))
-                            .text_size(theme.ui(11.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(theme.tokens.accent))
+            .when(open, |card| {
+                card.children(self.hosts.iter().enumerate().map(|(index, row)| {
+                    let host = row.host.clone();
+                    let dot = div()
+                        .flex_none()
+                        .size(px(7.))
+                        .rounded_full()
+                        .bg(rgb(crate::context_menu::host_dot_color(theme, row.dot)));
+                    let name_color = if row.up { theme.tokens.text } else { theme.tokens.muted };
+                    let name = div().flex_1().truncate().text_color(rgb(name_color)).child(host.name().to_string());
+                    let label = row.label.clone().map(|label| div().text_color(rgb(theme.tokens.muted)).child(label));
+                    if row.up {
+                        let update = row.update.clone().filter(|_| !row.updating).map(|text| {
+                            let host = host.clone();
+                            div()
+                                .id(("update-host", index))
+                                .flex_none()
+                                .h(theme.ui(18.))
+                                .px(theme.ui(7.))
+                                .flex()
+                                .items_center()
+                                .rounded_full()
+                                .border_1()
+                                .border_color(rgb(theme.tokens.accent))
+                                .text_size(theme.ui(11.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(rgb(theme.tokens.accent))
+                                .cursor_pointer()
+                                .child(text)
+                                .on_click(cx.listener(move |_, event: &ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    cx.emit(SidebarEvent::UpdateHost {
+                                        host: host.clone(),
+                                        position: event.position(),
+                                    });
+                                }))
+                        });
+                        let updating = row
+                            .updating
+                            .then(|| div().flex_none().text_color(rgb(theme.tokens.muted)).child("updating…"));
+                        let close = (!row.updating).then(|| {
+                            div()
+                                .id(("disconnect-host", index))
+                                .size(theme.ui(18.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded_full()
+                                .text_color(rgb(theme.tokens.muted))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgba(0x00000026)).text_color(rgb(theme.tokens.text)))
+                                .child("×")
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    cx.stop_propagation();
+                                    cx.emit(SidebarEvent::DisconnectHost(host.clone()));
+                                }))
+                        });
+                        row_base(("ssh-host", index))
+                            .child(dot)
+                            .child(name)
+                            .children(label)
+                            .children(update)
+                            .children(updating)
+                            .children(close)
+                    } else {
+                        row_base(("ssh-host", index))
                             .cursor_pointer()
-                            .child(text)
-                            .on_click(cx.listener(move |_, event: &ClickEvent, _, cx| {
-                                cx.stop_propagation();
-                                cx.emit(SidebarEvent::UpdateHost { host: host.clone(), position: event.position() });
-                            }))
-                    });
-                    let updating =
-                        row.updating.then(|| div().flex_none().text_color(rgb(theme.tokens.muted)).child("updating…"));
-                    let close = (!row.updating).then(|| {
-                        div()
-                            .id(("disconnect-host", index))
-                            .size(theme.ui(18.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .text_color(rgb(theme.tokens.muted))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(rgba(0x00000026)).text_color(rgb(theme.tokens.text)))
-                            .child("×")
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                cx.stop_propagation();
-                                cx.emit(SidebarEvent::DisconnectHost(host.clone()));
-                            }))
-                    });
-                    row_base(("ssh-host", index))
-                        .child(dot)
-                        .child(name)
-                        .children(label)
-                        .children(update)
-                        .children(updating)
-                        .children(close)
-                } else {
-                    row_base(("ssh-host", index))
+                            .hover(|style| style.bg(rgb(theme.tokens.raised)))
+                            .child(dot)
+                            .child(name)
+                            .children(label)
+                            .on_click(cx.listener(move |_, _, _, cx| cx.emit(SidebarEvent::ConnectHost(host.clone()))))
+                    }
+                }))
+                .child(
+                    row_base(("ssh-host-add", 0))
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgb(theme.tokens.raised)))
-                        .child(dot)
-                        .child(name)
-                        .children(label)
-                        .on_click(cx.listener(move |_, _, _, cx| cx.emit(SidebarEvent::ConnectHost(host.clone()))))
-                }
-            }))
-            .children(open.then(|| {
-                row_base(("ssh-host-add", 0))
-                    .cursor_pointer()
-                    .text_color(rgb(theme.tokens.muted))
-                    .hover(|style| style.bg(rgb(theme.tokens.raised)).text_color(rgb(theme.tokens.text)))
-                    .child(div().flex_none().w(px(7.)).child("+"))
-                    .child("Add SSH host…")
-                    .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::AddSshHost)))
-            }))
+                        .text_color(rgb(theme.tokens.muted))
+                        .hover(|style| style.bg(rgb(theme.tokens.raised)).text_color(rgb(theme.tokens.text)))
+                        .child(div().flex_none().w(px(7.)).child("+"))
+                        .child("Add SSH host…")
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::AddSshHost))),
+                )
+            })
     }
 
     /// Apply a session change of `host`.
@@ -1141,10 +1153,8 @@ impl Render for SidebarView {
         // The rename field has the focus then, not the filter.
         let focused = focused && self.renaming.is_none();
         // The sessions list started to scroll (or fits again): the SSH hosts block may fold by itself.
-        if let Some(extent) = Extent::of(&self.scroll)
-            && self.hosts_fold.observe(extent.contents.1 > extent.viewport.1 + 0.5)
-        {
-            cx.notify();
+        if let Some(extent) = Extent::of(&self.scroll) {
+            self.hosts_fold.observe(extent.contents.1 > extent.viewport.1 + 0.5);
         }
         let theme = theme(cx).clone();
         div()
