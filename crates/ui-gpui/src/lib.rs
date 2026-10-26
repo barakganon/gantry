@@ -34,26 +34,36 @@ use std::path::PathBuf;
 use app_core::settings::WindowSettings;
 use app_core::split_tree::NodeId;
 use app_core::workspace::{ClaudeDirs, HostLive, Launch, restore};
-use app_core::{layout_store, window_state};
+use app_core::{dialogs, layout_store, window_state};
 use daemon::client::{Connection, DaemonClient, StartError, restart_daemon};
 use daemon::launch::spawn_detached_daemon;
 use daemon::paths::{Paths, current_profile};
 use gpui::{
-    App, AppContext, Bounds, Context, IntoElement, PromptLevel, Render, Styled, TitlebarOptions, Window, WindowBounds,
-    WindowHandle, WindowOptions, div, px, rgb, size,
+    App, AppContext, Bounds, Context, Entity, Focusable, IntoElement, ParentElement, Render, Styled, Subscription,
+    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, px, rgb, size,
 };
 
 use protocol::host::HostId;
 
+use crate::dialog_view::{DialogEvent, DialogView, dialog_overlay};
 use crate::settings_store::SettingsStore;
 use crate::workspace_view::{Resume, WorkspaceView};
 
 /// Placeholder shown while asking whether to restart a mismatched daemon.
-struct Notice;
+struct Notice {
+    dialog: Option<Entity<DialogView>>,
+    _subscription: Option<Subscription>,
+}
 
 impl Render for Notice {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().size_full().bg(rgb(theme::theme(cx).tokens.ground))
+        let theme = theme::theme(cx).clone();
+        let animate = cx.global::<SettingsStore>().settings().animate_ui;
+        div()
+            .size_full()
+            .bg(rgb(theme.tokens.ground))
+            .relative()
+            .children(self.dialog.clone().map(|view| dialog_overlay(view, &theme, animate)))
     }
 }
 
@@ -112,30 +122,39 @@ pub fn run(launch: Launch, resume_sessions: bool) {
                 install_quit_prompt(window, cx);
             }
             Err(StartError::VersionMismatch { .. }) => {
-                let window = cx.open_window(options, |_, cx| cx.new(|_| Notice)).expect("open window");
-                let _ = window.update(cx, move |_, window, cx| {
-                    let answer = window.prompt(
-                        PromptLevel::Warning,
-                        "Gantry daemon version mismatch",
-                        Some("Restarting stops all sessions."),
-                        &["Restart daemon", "Quit"],
-                        cx,
-                    );
-                    cx.spawn_in(window, async move |_, cx| {
-                        let restarted = answer.await == Ok(0) && restart_daemon(&paths).is_ok();
-                        let connection =
-                            restarted.then(|| DaemonClient::connect(&paths, spawn_detached_daemon).ok()).flatten();
-                        let _ = cx.update(|window, cx| match connection {
-                            Some(connection) => {
-                                let view = window.replace_root(cx, |window, cx| {
-                                    workspace(connection, &launch, &paths, resume_sessions, window, cx)
-                                });
-                                install_should_close(window, cx, view);
-                            }
-                            None => cx.quit(),
-                        });
-                    })
-                    .detach();
+                let window = cx
+                    .open_window(options, |_, cx| cx.new(|_| Notice { dialog: None, _subscription: None }))
+                    .expect("open window");
+                let mut restart = Some((paths, launch));
+                let _ = window.update(cx, move |notice, window, cx| {
+                    let view = cx.new(|cx| DialogView::new(dialogs::daemon_mismatch(), cx));
+                    let subscription = cx.subscribe_in(&view, window, move |_, _, event: &DialogEvent, window, cx| {
+                        let DialogEvent::Chosen(index) = event;
+                        let Some((paths, launch)) = restart.take() else { return };
+                        if *index != 0 {
+                            cx.quit();
+                            return;
+                        }
+                        cx.spawn_in(window, async move |_, cx| {
+                            let restarted = restart_daemon(&paths).is_ok();
+                            let connection =
+                                restarted.then(|| DaemonClient::connect(&paths, spawn_detached_daemon).ok()).flatten();
+                            let _ = cx.update(|window, cx| match connection {
+                                Some(connection) => {
+                                    let view = window.replace_root(cx, |window, cx| {
+                                        workspace(connection, &launch, &paths, resume_sessions, window, cx)
+                                    });
+                                    install_should_close(window, cx, view);
+                                }
+                                None => cx.quit(),
+                            });
+                        })
+                        .detach();
+                    });
+                    view.focus_handle(cx).focus(window, cx);
+                    notice.dialog = Some(view);
+                    notice._subscription = Some(subscription);
+                    cx.notify();
                 });
             }
             Err(err) => {
