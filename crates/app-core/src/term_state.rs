@@ -278,13 +278,14 @@ impl TermState {
 
     /// Begin a selection at a viewport cell.
     pub fn start_selection(&mut self, col: u16, row: u16, right_half: bool) {
-        self.start_selection_by(col, row, right_half, 1);
+        self.start_selection_by(col, row, right_half, 1, false);
     }
 
     /// Begin a selection at a viewport cell by the click count: characters, the word there (double), its line
-    /// (triple).
-    pub fn start_selection_by(&mut self, col: u16, row: u16, right_half: bool, clicks: usize) {
+    /// (triple); or a rectangle of columns (`block`, Option-drag).
+    pub fn start_selection_by(&mut self, col: u16, row: u16, right_half: bool, clicks: usize, block: bool) {
         let kind = match clicks {
+            _ if block => SelectionType::Block,
             2 => SelectionType::Semantic,
             3.. => SelectionType::Lines,
             _ => SelectionType::Simple,
@@ -697,10 +698,19 @@ mod tests {
     fn a_double_click_selects_the_word_and_a_triple_its_line() {
         let mut t = TermState::new(20, 2);
         t.feed(b"fix teh_bug now");
-        t.start_selection_by(6, 0, false, 2);
+        t.start_selection_by(6, 0, false, 2, false);
         assert_eq!(t.selection_text().as_deref(), Some("teh_bug"));
-        t.start_selection_by(6, 0, false, 3);
+        t.start_selection_by(6, 0, false, 3, false);
         assert_eq!(t.selection_text().as_deref().map(str::trim_end), Some("fix teh_bug now"));
+    }
+
+    #[test]
+    fn an_option_drag_selects_a_block_of_columns() {
+        let mut t = TermState::new(20, 3);
+        t.feed(b"a: one\r\nb: two\r\nc: six");
+        t.start_selection_by(3, 0, false, 1, true);
+        t.update_selection(5, 2, true);
+        assert_eq!(t.selection_text().as_deref(), Some("one\ntwo\nsix"));
     }
 
     #[test]
