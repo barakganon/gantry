@@ -69,14 +69,6 @@ impl WorkspaceView {
                 self.remember_pick(&dir, &dir_name, cx);
                 self.open_new(true, dir, None, None, HostId::local(), Some(dir_name));
             }
-            MenuAction::PinFavorite(dir) => SettingsStore::update(cx, |settings| {
-                if !settings.favorites.contains(&dir) {
-                    settings.favorites.push(dir);
-                }
-            }),
-            MenuAction::UnpinFavorite(dir) => {
-                SettingsStore::update(cx, |settings| settings.favorites.retain(|favorite| *favorite != dir))
-            }
             MenuAction::SetProjectColor { root, color } => SettingsStore::update(cx, |settings| match color {
                 Some(color) => {
                     settings.project_colors.folders.insert(root, color);
