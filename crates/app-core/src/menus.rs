@@ -488,7 +488,7 @@ pub fn row_menu(row: &Row, alone: &dyn Fn(NodeId) -> bool, context: &MenuContext
 }
 
 /// A project heading's menu; `path` = the project key (see `protocol::host::project_key`), `container` = the dev
-/// container one of its sessions runs in, if any. A remote project has a pin (saved under its key) but no color or
+/// container one of its sessions runs in, if any. A remote project's pin and color are saved under its key; it has no
 /// local folder entries.
 pub fn project_menu(path: &Path, container: Option<&ContainerPlace>, context: &MenuContext) -> Vec<MenuItem> {
     let (host, dir) = split_project_key(path);
@@ -498,7 +498,7 @@ pub fn project_menu(path: &Path, container: Option<&ContainerPlace>, context: &M
         items.extend(claude_with_on(path, context, &host));
     }
     items.push(entry("New terminal here", new_here(false)));
-    if let Some(current) = context.project_color.filter(|_| host.is_local()) {
+    if let Some(current) = context.project_color {
         items.push(color_menu(path, current));
     }
     items.extend([
@@ -1067,12 +1067,19 @@ mod tests {
     }
 
     #[test]
-    fn a_remote_project_heading_has_no_color_or_folder_entries() {
+    fn a_remote_project_heading_has_a_color_but_no_folder_entries() {
         let context = MenuContext { project_color: Some(None), ..two_dirs(None) };
         let items = project_menu(Path::new("ssh://devbox/r/app"), None, &context);
         assert_eq!(
             labels(&items),
-            ["New Claude here", "New terminal here", "Recent sessions here", "│", "Copy folder path (on devbox)"]
+            [
+                "New Claude here",
+                "New terminal here",
+                "Color ▸",
+                "Recent sessions here",
+                "│",
+                "Copy folder path (on devbox)"
+            ]
         );
         let MenuItem::Entry(new) = &items[0] else { panic!() };
         assert_eq!(new.action, MenuAction::NewHere { dir: "/r/app".into(), claude: true, host: devbox() });

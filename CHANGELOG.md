@@ -5,6 +5,9 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+- **Project color on SSH hosts** - A remote project heading's right-click menu now has Color, so its color can be changed like a local project's. It is saved in `projectColors` under `ssh://<host>/<folder>`.
+
 ## [0.12.0] - 2026-10-26
 
 ### Added
