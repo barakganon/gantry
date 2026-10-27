@@ -345,6 +345,8 @@ pub struct WorkspaceView {
     pane_anim: Option<PaneAnim>,
     /// Where the pane being dragged would land, while it is over a pane of the visible tab.
     pane_drop: Option<PaneDrop>,
+    /// A pane (not a file from the OS) is being dragged: only then the panes get the drop overlay.
+    pane_dragging: bool,
     sidebar: Entity<SidebarView>,
     /// Window bounds of the sidebar (for width drags).
     sidebar_bounds: Bounds<Pixels>,
@@ -601,6 +603,7 @@ impl WorkspaceView {
             content_bounds: Bounds::default(),
             pane_anim: None,
             pane_drop: None,
+            pane_dragging: false,
             sidebar,
             sidebar_bounds: Bounds::default(),
             resizing_sidebar: false,

@@ -333,7 +333,8 @@ impl WorkspaceView {
         let animating = self.pane_anim.is_some() || self.panel_anim.is_some();
         let entering = self.pane_anim.as_ref().and_then(|anim| anim.entering);
         let size = self.content_bounds.size;
-        let dragging_pane = cx.has_active_drag();
+        // A file dragged in from the OS is a drag too, but not a pane's: only a pane drag gets the overlay.
+        let dragging_pane = self.pane_dragging;
         div()
             .id("tab-content")
             .relative()
