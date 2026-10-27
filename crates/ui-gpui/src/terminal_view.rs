@@ -1,6 +1,7 @@
 //! GPUI view that renders one terminal pane and exchanges bytes with its PTY.
 
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::assets::ARROW_DOWN_ICON;
@@ -24,11 +25,12 @@ use app_core::scroll::{
 };
 use app_core::session_tree::Tone;
 use app_core::settings::Settings;
+use app_core::settings::expand_home;
 use app_core::shortcuts::{self, Group, Platform};
 use app_core::snapshot::{CellStyle, Rgb, ScreenSnapshot, row_spans};
 use app_core::term_state::{Reach, TermState};
 use app_core::theme_colors::{deepen, mix, terminal_palette};
-use app_core::url::link_at;
+use app_core::url::{link_at, path_at};
 use app_core::workspace::PaneLaunch;
 use daemon::client::{ClientEvent, DaemonClient};
 use gpui::{
@@ -904,9 +906,9 @@ impl TerminalView {
         }
         let Some((col, row, right_half)) = self.logical_cell_at(event.position) else { return };
         if link_modifier(event.modifiers)
-            && let Some(link) = link_at(&self.term.row_text(row), col as usize)
+            && let Some((_, target)) = self.link_target_at(col, row)
         {
-            cx.open_url(&link.url);
+            open_link(target, cx);
             return;
         }
         if let Some(button) = report_button(event.button)
@@ -953,13 +955,28 @@ impl TerminalView {
         }
     }
 
+    /// What Cmd+click at a cell opens: a URL, or a path on this machine that exists (relative to the pane's folder).
+    fn link_target_at(&self, col: u16, row: u16) -> Option<(Range<usize>, LinkTarget)> {
+        let text = self.term.row_text(row);
+        if let Some(link) = link_at(&text, col as usize) {
+            return Some((link.cols, LinkTarget::Url(link.url)));
+        }
+        if self.remote || self.launch.container.is_some() {
+            return None;
+        }
+        let link = path_at(&text, col as usize)?;
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let path = self.launch.cwd.join(expand_home(Path::new(&link.path), home.as_deref()));
+        path.exists().then_some((link.cols, LinkTarget::Path(path, link.line, link.column)))
+    }
+
     /// Underline the link under the mouse while the link modifier (Ctrl, or Cmd on macOS) is held.
     fn update_hovered_link(&mut self, modifiers: Modifiers, cx: &mut Context<Self>) {
         let hovered = self
             .mouse_position
             .filter(|_| link_modifier(modifiers))
             .and_then(|position| self.logical_cell_at(position))
-            .and_then(|(col, row, _)| link_at(&self.term.row_text(row), col as usize).map(|link| (row, link.cols)));
+            .and_then(|(col, row, _)| self.link_target_at(col, row).map(|(cols, _)| (row, cols)));
         if hovered != self.hovered_link {
             self.hovered_link = hovered;
             cx.notify();
@@ -1669,6 +1686,27 @@ fn paint_grid(
         } else {
             window.paint_quad(outline(bounds, color, BorderStyle::Solid));
         }
+    }
+}
+
+enum LinkTarget {
+    Url(String),
+    /// A path, and the line and column to open a file at.
+    Path(PathBuf, Option<u32>, Option<u32>),
+}
+
+const VSCODE: &str = "/Applications/Visual Studio Code.app";
+
+/// URLs open in the browser; files in VS Code when it is installed (at their line), else in their default app; folders
+/// in Finder.
+fn open_link(target: LinkTarget, cx: &mut App) {
+    match target {
+        LinkTarget::Url(url) => cx.open_url(&url),
+        LinkTarget::Path(path, line, column) if path.is_file() && Path::new(VSCODE).exists() => {
+            let at = line.map(|line| format!(":{line}:{}", column.unwrap_or(1))).unwrap_or_default();
+            cx.open_url(&format!("vscode://file{}{at}", path.display().to_string().replace(' ', "%20")));
+        }
+        LinkTarget::Path(path, ..) => cx.open_with_system(&path),
     }
 }
 
