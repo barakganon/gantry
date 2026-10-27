@@ -6,6 +6,7 @@ and the version follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Fixed
+- **Project color on SSH hosts** - A remote project heading's right-click menu now has Color, so its color can be changed like a local project's. It is saved in `projectColors` under `ssh://<host>/<folder>`.
 - **Tab switching skips collapsed projects** - Ctrl+Tab, Ctrl+Shift+Tab and Back / Forward no longer land on a tab that a collapsed project heading hides in the sidebar.
 
 ## [0.12.0] - 2026-10-26
