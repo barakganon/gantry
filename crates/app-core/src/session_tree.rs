@@ -963,6 +963,12 @@ pub fn leaves_in_order(rows: &[Row]) -> Vec<NodeId> {
     leaves
 }
 
+/// The leaves listed in `all` that `shown` leaves out, top to bottom (those under a collapsed project).
+pub fn hidden_leaves(all: &[Row], shown: &[Row]) -> Vec<NodeId> {
+    let shown = leaves_in_order(shown);
+    leaves_in_order(all).into_iter().filter(|leaf| !shown.contains(leaf)).collect()
+}
+
 /// Leaves whose session needs input, top to bottom (sessions outside Gantry have no leaf and are left out).
 pub fn needs_input_leaves(rows: &[Row]) -> Vec<NodeId> {
     rows.iter()
@@ -1343,6 +1349,15 @@ mod tests {
         assert_eq!(fixture.outline(), vec!["▸ p", "▾ q", "  leaf 2 (Terminal)"]);
         fixture.filter = "pane 1".into();
         assert_eq!(fixture.outline(), vec!["▾ p", "  leaf 1 (Terminal)"]);
+    }
+
+    #[test]
+    fn the_leaves_under_a_collapsed_project_are_hidden() {
+        let mut fixture = Fixture::of(vec![], vec![shell_pane(1, "/r/p"), shell_pane(2, "/r/q")]);
+        let all = fixture.rows();
+        assert!(hidden_leaves(&all, &all).is_empty());
+        fixture.toggled.insert("/r/p".into());
+        assert_eq!(hidden_leaves(&all, &fixture.rows()), [1]);
     }
 
     #[test]
