@@ -4,8 +4,8 @@ use super::{CardKind, HostUpdateCard, PANE_GAP, SIDEBAR_EDGE, WorkspaceView};
 use app_core::host_update::ask_note;
 use app_core::version::{Note, Version};
 use gpui::{
-    Context, CursorStyle, FontWeight, HighlightStyle, IntoElement, MouseButton, MouseDownEvent, Render, StyledText,
-    Window, canvas, div, prelude::*, px, rgb, rgba,
+    Context, CursorStyle, DragMoveEvent, FontWeight, HighlightStyle, IntoElement, MouseButton, MouseDownEvent, Render,
+    StyledText, Window, canvas, div, prelude::*, px, rgb, rgba,
 };
 
 use app_core::menus::MenuAction;
@@ -14,6 +14,7 @@ use app_core::session_tree::Tone;
 use crate::color_picker_view::ColorPickerEvent;
 use crate::context_menu::{self};
 use crate::dialog_view::dialog_overlay;
+use crate::pane_drag::DraggedPane;
 use crate::settings_store::SettingsStore;
 use crate::theme::{FadeKind, RADIUS, RADIUS_SMALL, Theme, UI_FONT, fade_in, theme};
 use crate::window_frame;
@@ -23,6 +24,8 @@ impl Render for WorkspaceView {
         let animate = cx.global::<SettingsStore>().settings().animate_working && window.is_window_active();
         let theme = theme(cx).clone();
         let viewport = window.viewport_size();
+        // The pane drag is over once gpui has no drag.
+        self.pane_dragging &= cx.has_active_drag();
         let fade = cx.global::<SettingsStore>().settings().animate_ui;
         // A split or close moves only while animations are on and the window is active; else it is at its end.
         if !(fade && window.is_window_active()) {
@@ -139,6 +142,12 @@ impl Render for WorkspaceView {
                 }
             }))
             .on_mouse_move(cx.listener(Self::drag_sidebar))
+            // Only a pane drag reports here; a file dragged in from the OS is a drag too, but not this type.
+            .on_drag_move(cx.listener(|this, _: &DragMoveEvent<DraggedPane>, _, cx| {
+                if !std::mem::replace(&mut this.pane_dragging, true) {
+                    cx.notify();
+                }
+            }))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
