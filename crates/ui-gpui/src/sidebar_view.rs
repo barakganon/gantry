@@ -268,6 +268,11 @@ impl SidebarView {
         session_tree::leaves_in_order(&self.all_rows)
     }
 
+    /// The leaves whose rows a collapsed project hides (none while a filter expands every project).
+    pub fn collapsed_leaves(&self) -> Vec<NodeId> {
+        if self.filter.text().is_empty() { session_tree::hidden_leaves(&self.all_rows, &self.rows) } else { Vec::new() }
+    }
+
     /// The leaves whose session needs input, in sidebar order.
     pub fn needs_input(&self) -> Vec<NodeId> {
         session_tree::needs_input_leaves(&self.all_rows)

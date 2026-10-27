@@ -14,7 +14,7 @@ use app_core::workspace::{HostLive, reconcile, without_killed_offline};
 use daemon::client::Connection;
 use daemon::paths::{Paths, current_profile};
 use daemon::ssh::{Attempt, AttemptHandle, HANDSHAKE_TIMEOUT, Share, SshHostSpec, connect as ssh_connect};
-use gpui::{Context, Focusable, Pixels, Point, Window, prelude::*};
+use gpui::{App, Context, Focusable, Pixels, Point, Window, prelude::*};
 use protocol::host::HostId;
 use protocol::message::PaletteColors;
 
@@ -548,9 +548,16 @@ impl WorkspaceView {
         self.ssh_hosts.iter().any(|entry| entry.name == host.name()) && !self.host_state(host).in_connected_list()
     }
 
-    /// The leaves of hosts that are away: their tabs are passed by when switching tabs, like the sidebar does.
-    pub(super) fn away_leaves(&self) -> HashSet<NodeId> {
-        self.workspace.leaves.iter().filter(|(_, leaf)| self.is_away(&leaf.host)).map(|(id, _)| *id).collect()
+    /// The leaves the sidebar does not show: those of hosts that are away and those under a collapsed project. Their
+    /// tabs are passed by when switching tabs.
+    pub(super) fn away_leaves(&self, cx: &App) -> HashSet<NodeId> {
+        let collapsed = self.sidebar.read(cx).collapsed_leaves();
+        self.workspace
+            .leaves
+            .iter()
+            .filter(|(id, leaf)| self.is_away(&leaf.host) || collapsed.contains(id))
+            .map(|(id, _)| *id)
+            .collect()
     }
 
     /// The × of `host` in the sidebar's Connected block: cancels a connection that is not up, stops an idle host's
