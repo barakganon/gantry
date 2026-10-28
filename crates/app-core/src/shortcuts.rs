@@ -103,7 +103,7 @@ pub const ACTIONS: &[Action] = &[
     mac("undoEdit", "Undo", "cmd-z"),
     mac("editPrompt", "Edit the prompt in an editor (Claude)", "cmd-shift-e"),
     mac("pasteExpanded", "Paste long text in full, not collapsed (Claude)", "cmd-shift-v"),
-    mac("togglePaste", "Collapse or expand the last long paste (Claude)", "cmd-alt-v"),
+    mac("togglePaste", "Collapse or expand the last long paste (Claude)", "cmd-shift-p"),
     mac("selectLeft", "Select a character left", "shift-left"),
     mac("selectRight", "Select a character right", "shift-right"),
     mac("selectWordLeft", "Select a word left", "alt-shift-left"),
