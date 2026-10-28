@@ -440,6 +440,15 @@ impl TermState {
         (self.prompt_cursor()? == end).then(|| self.prompt_text_to_cursor()).flatten()
     }
 
+    /// The rows of Claude's input box: between the `─` rules above and below the prompt cursor.
+    pub fn input_box_text(&self) -> Option<String> {
+        let (row, _) = self.prompt_cursor()?;
+        let rule = |row: usize| self.row_text(row as u16).starts_with('─');
+        let top = (0..row).rev().find(|&above| rule(above)).map_or(0, |above| above + 1);
+        let bottom = (row..self.term.screen_lines()).find(|&below| rule(below)).unwrap_or(self.term.screen_lines());
+        Some((top..bottom).map(|row| self.row_text(row as u16) + "\n").collect())
+    }
+
     /// The prompt line's text up to the cursor.
     pub fn prompt_text_to_cursor(&self) -> Option<String> {
         let cursor = self.prompt_cursor()?;

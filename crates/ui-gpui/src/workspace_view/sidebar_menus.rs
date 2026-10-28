@@ -144,6 +144,7 @@ impl WorkspaceView {
             | MenuAction::LearnWord(_)
             | MenuAction::Rephrase
             | MenuAction::PasteExpanded
+            | MenuAction::TogglePaste
             | MenuAction::CutSelection
             | MenuAction::CopySelection
             | MenuAction::PasteClipboard => {}

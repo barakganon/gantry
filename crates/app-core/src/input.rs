@@ -253,9 +253,7 @@ mod tests {
         assert_eq!(edit_bytes("selectLine"), None, "selection is drawn here, not sent");
         let editing = crate::shortcuts::ACTIONS.iter().filter(|a| a.group == crate::shortcuts::Group::Editing);
         assert!(
-            editing
-                .clone()
-                .all(|a| edit_bytes(a.id).is_some() || a.id.starts_with("select") || a.id == "pasteExpanded")
+            editing.clone().all(|a| edit_bytes(a.id).is_some() || a.id.starts_with("select") || a.id.contains("aste"))
         );
     }
 

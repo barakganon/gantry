@@ -273,6 +273,8 @@ pub struct TerminalView {
     rephrase: Option<Task<()>>,
     /// The last spelling fix or rephrase on the prompt (original, replacement), for Cmd+Z until other input.
     replaced: Option<(String, String)>,
+    /// The last paste long enough for Claude to collapse, with `\n` newlines as Claude keeps them.
+    long_paste: Option<String>,
     /// Display order of each viewport row in the last frame (`None`: drawn as stored).
     row_orders: Vec<Option<RowOrder>>,
     /// Input typed while Starting, sent on attach.
@@ -326,6 +328,7 @@ impl TerminalView {
             spell_menu: None,
             rephrase: None,
             replaced: None,
+            long_paste: None,
             row_orders: Vec::new(),
             held_input: Vec::new(),
             host_card: None,
@@ -654,6 +657,7 @@ impl TerminalView {
             match edit_bytes(id) {
                 _ if id == "undoEdit" && self.undo_replace(cx) => {}
                 _ if id == "pasteExpanded" => self.paste_expanded(cx),
+                _ if id == "togglePaste" && self.toggle_paste(cx) => {}
                 Some(bytes) => self.send_input(bytes, cx),
                 None if self.select_on_prompt(id, cx) => {}
                 None => return,
@@ -715,20 +719,54 @@ impl TerminalView {
     /// again right away, so long text goes in twice.
     fn paste_expanded(&mut self, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else { return };
-        let length = text.encode_utf16().count();
-        let collapses = length > 800 || text.matches('\n').count() > 2;
         let mut bytes = self.delete_prompt_selection().unwrap_or_default();
         bytes.extend(encode_paste(&text, self.term.bracketed_paste()));
-        if collapses && length <= 100_000 && self.term.bracketed_paste() && self.launch.is_claude() {
+        if self.note_long_paste(&text) && text.encode_utf16().count() <= 100_000 {
             bytes.extend(encode_paste(&text, true));
         }
         self.send_input(&bytes, cx);
+    }
+
+    /// Remember `text` when Claude collapses it into `[Pasted text]`; whether it does.
+    fn note_long_paste(&mut self, text: &str) -> bool {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let collapses = (text.encode_utf16().count() > 800 || text.matches('\n').count() > 2)
+            && self.term.bracketed_paste()
+            && self.launch.is_claude();
+        if collapses {
+            self.long_paste = Some(text);
+        }
+        collapses
+    }
+
+    /// Whether the last long paste shows collapsed on the prompt (`Some(true)`), or in full just before the cursor.
+    fn paste_collapsed(&self) -> Option<bool> {
+        let text = self.long_paste.as_ref()?;
+        if self.term.input_box_text()?.contains("[Pasted text #") {
+            return Some(true);
+        }
+        let last_line = text.lines().last()?.trim();
+        let shown = self.term.prompt_text_to_cursor()?;
+        let shown = shown.trim();
+        let at_cursor = !last_line.is_empty() && (shown.ends_with(last_line) || last_line.ends_with(shown));
+        at_cursor.then_some(false)
+    }
+
+    /// Claude expands its latest `[Pasted text]` when the same text is pasted again; collapsing deletes the text and
+    /// pastes it once.
+    fn toggle_paste(&mut self, cx: &mut Context<Self>) -> bool {
+        let (Some(collapsed), Some(text)) = (self.paste_collapsed(), self.long_paste.clone()) else { return false };
+        let mut bytes = if collapsed { Vec::new() } else { vec![0x7f; text.chars().count()] };
+        bytes.extend(encode_paste(&text, true));
+        self.send_input(&bytes, cx);
+        true
     }
 
     fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
         // Pasting over a selection on the prompt replaces it.
         let mut bytes = self.delete_prompt_selection().unwrap_or_default();
         bytes.extend(encode_paste(text, self.term.bracketed_paste()));
+        self.note_long_paste(text);
         self.send_input(&bytes, cx);
     }
 
@@ -779,7 +817,9 @@ impl TerminalView {
         let copy = self.term.selection_text().is_some();
         let paste = typing && self.term.prompt_cursor().is_some();
         let misspelled = word.as_ref().map(|_| (spelled.as_str(), guesses.as_slice()));
-        let items = menus::prompt_menu(misspelled, cut, copy, paste, paste && self.launch.is_claude(), rephrase);
+        let collapsed = self.paste_collapsed().filter(|_| paste);
+        let items =
+            menus::prompt_menu(misspelled, cut, copy, paste, paste && self.launch.is_claude(), collapsed, rephrase);
         if items.is_empty() {
             return false;
         }
@@ -843,6 +883,9 @@ impl TerminalView {
             }
             MenuAction::Rephrase => self.rephrase_selection(cx),
             MenuAction::PasteExpanded => self.paste_expanded(cx),
+            MenuAction::TogglePaste => {
+                self.toggle_paste(cx);
+            }
             MenuAction::CutSelection => self.cut(&Cut, window, cx),
             MenuAction::CopySelection => self.copy(&Copy, window, cx),
             MenuAction::PasteClipboard => self.paste(&Paste, window, cx),
