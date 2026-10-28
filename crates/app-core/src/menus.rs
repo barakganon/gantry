@@ -115,8 +115,8 @@ pub enum MenuAction {
     LearnWord(String),
     /// Rewrite the prompt selection with Claude.
     Rephrase,
-    /// Open the Claude prompt in an editor.
-    EditPrompt,
+    /// Paste long text into the Claude prompt in full, not as a `[Pasted text]` placeholder.
+    PasteExpanded,
     /// Copy the prompt selection and delete it.
     CutSelection,
     /// Copy the terminal selection.
@@ -262,7 +262,7 @@ pub fn prompt_menu(
     groups.push(edit);
     let mut claude = Vec::new();
     if editor {
-        claude.push(entry("Edit in Editor", MenuAction::EditPrompt));
+        claude.push(entry("Paste Expanded", MenuAction::PasteExpanded));
     }
     if rephrase {
         claude.push(entry("Rephrase with Claude", MenuAction::Rephrase));
@@ -1194,7 +1194,7 @@ mod tests {
         assert_eq!(labels(prompt_menu(Some(("qbz", &[])), false, false, false, false, false)), ["Learn Spelling"]);
         assert_eq!(
             labels(prompt_menu(Some(("qbz", &[])), true, true, true, true, true)),
-            ["Learn Spelling", "-", "Cut", "Copy", "Paste", "-", "Edit in Editor", "Rephrase with Claude"]
+            ["Learn Spelling", "-", "Cut", "Copy", "Paste", "-", "Paste Expanded", "Rephrase with Claude"]
         );
         assert_eq!(labels(prompt_menu(None, false, true, false, false, false)), ["Copy"]);
         assert!(prompt_menu(None, false, false, false, false, false).is_empty());

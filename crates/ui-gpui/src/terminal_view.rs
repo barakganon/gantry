@@ -653,6 +653,7 @@ impl TerminalView {
         {
             match edit_bytes(id) {
                 _ if id == "undoEdit" && self.undo_replace(cx) => {}
+                _ if id == "pasteExpanded" => self.paste_expanded(cx),
                 Some(bytes) => self.send_input(bytes, cx),
                 None if self.select_on_prompt(id, cx) => {}
                 None => return,
@@ -708,6 +709,20 @@ impl TerminalView {
     /// Not on Windows yet: quoting is POSIX shell quoting.
     fn paths_are_local(&self) -> bool {
         !cfg!(windows) && !self.remote && self.launch.container.is_none()
+    }
+
+    /// Claude collapses a long paste into `[Pasted text #1 +40 lines]` and expands it when the same text is pasted
+    /// again right away, so long text goes in twice.
+    fn paste_expanded(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else { return };
+        let length = text.encode_utf16().count();
+        let collapses = length > 800 || text.matches('\n').count() > 2;
+        let mut bytes = self.delete_prompt_selection().unwrap_or_default();
+        bytes.extend(encode_paste(&text, self.term.bracketed_paste()));
+        if collapses && length <= 100_000 && self.term.bracketed_paste() && self.launch.is_claude() {
+            bytes.extend(encode_paste(&text, true));
+        }
+        self.send_input(&bytes, cx);
     }
 
     fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
@@ -827,7 +842,7 @@ impl TerminalView {
                 self.spell_cache.clear();
             }
             MenuAction::Rephrase => self.rephrase_selection(cx),
-            MenuAction::EditPrompt => self.send_input(b"\x07", cx),
+            MenuAction::PasteExpanded => self.paste_expanded(cx),
             MenuAction::CutSelection => self.cut(&Cut, window, cx),
             MenuAction::CopySelection => self.copy(&Copy, window, cx),
             MenuAction::PasteClipboard => self.paste(&Paste, window, cx),
