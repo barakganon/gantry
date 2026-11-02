@@ -154,6 +154,10 @@ pub struct AlertSettings {
     pub play_sounds: bool,
     /// Sound volume, 0 to 1.
     pub volume: f32,
+    /// Warn when one pane uses this many GB (0 = never).
+    pub memory_pane_gb: u32,
+    /// Warn when all panes together use this many GB (0 = never).
+    pub memory_total_gb: u32,
 }
 
 /// One Claude config dir the user listed.
@@ -468,6 +472,8 @@ impl Default for Settings {
                 only_when_unfocused: false,
                 play_sounds: true,
                 volume: 0.4,
+                memory_pane_gb: 4,
+                memory_total_gb: 24,
             },
             shortcuts: BTreeMap::new(),
             claude_dirs: Vec::new(),
@@ -889,6 +895,12 @@ impl Reader {
             only_when_unfocused: self.bool(&map, "alerts.", "onlyWhenUnfocused", default.only_when_unfocused),
             play_sounds: self.bool(&map, "alerts.", "playSounds", default.play_sounds),
             volume: self.number(&map, "alerts.", "volume", 0.4, (0.0, 1.0)) as f32,
+            memory_pane_gb: self
+                .number(&map, "alerts.", "memoryPaneGb", default.memory_pane_gb as f64, (0.0, 1024.0))
+                .round() as u32,
+            memory_total_gb: self
+                .number(&map, "alerts.", "memoryTotalGb", default.memory_total_gb as f64, (0.0, 1024.0))
+                .round() as u32,
         };
 
         let shortcuts = self.shortcuts(raw);
@@ -1049,6 +1061,12 @@ fn leaves(settings: &Settings) -> Vec<(Vec<&'static str>, Value, bool)> {
         alerts.finished_after_seconds.into(),
         alerts.finished_after_seconds != base.finished_after_seconds,
     );
+    for (key, value, base) in [
+        ("memoryPaneGb", alerts.memory_pane_gb, base.memory_pane_gb),
+        ("memoryTotalGb", alerts.memory_total_gb, base.memory_total_gb),
+    ] {
+        add(&["alerts", key], value.into(), value != base);
+    }
     add(&["alerts", "whenVisible"], alerts.when_visible.into(), alerts.when_visible != base.when_visible);
     add(
         &["alerts", "onlyWhenUnfocused"],
@@ -1441,6 +1459,8 @@ mod tests {
                 only_when_unfocused: true,
                 play_sounds: false,
                 volume: 0.7,
+                memory_pane_gb: 8,
+                memory_total_gb: 0,
             },
             ..Settings::default()
         };

@@ -428,6 +428,8 @@ pub struct WorkspaceView {
     git_task: Option<Task<()>>,
     /// Resident bytes of each pane's processes, as its daemon last reported.
     memory: HashMap<PaneKey, u64>,
+    /// Which memory limits are over, so each crossing warns once.
+    memory_watch: app_core::memory::MemoryWatch<PaneKey>,
     /// The timer that asks the daemons for them.
     memory_task: Option<Task<()>>,
     /// Take-over requests waiting for the host's daemon, by host and session.
@@ -655,6 +657,7 @@ impl WorkspaceView {
             git_bars: git_scrollbar::Bars::new(),
             git_task: None,
             memory: HashMap::new(),
+            memory_watch: Default::default(),
             memory_task: None,
             take_overs: HashMap::new(),
             pending_opens: HashMap::new(),

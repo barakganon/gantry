@@ -73,6 +73,26 @@ fn tone_label(tone: AlertTone) -> &'static str {
     TONES.iter().find(|(candidate, _)| *candidate == tone).map_or("", |(_, label)| label)
 }
 
+const MEMORY_PANE: Stepped = Stepped {
+    name: "memory-pane",
+    get: |s| s.alerts.memory_pane_gb as f32,
+    set: |s, value| s.alerts.memory_pane_gb = value as u32,
+    delta: 1.0,
+    min: 0.0,
+    max: 1024.0,
+    unit: "GB",
+};
+
+const MEMORY_TOTAL: Stepped = Stepped {
+    name: "memory-total",
+    get: |s| s.alerts.memory_total_gb as f32,
+    set: |s, value| s.alerts.memory_total_gb = value as u32,
+    delta: 1.0,
+    min: 0.0,
+    max: 1024.0,
+    unit: "GB",
+};
+
 const FINISHED_AFTER: Stepped = Stepped {
     name: "finished-after",
     get: |s| s.alerts.finished_after_seconds as f32,
@@ -229,6 +249,40 @@ impl SettingsView {
             "How long a session must be busy before going idle counts as finished.",
             after,
             after_reset,
+        ));
+        let pane = self.stepper(&MEMORY_PANE, settings, window, cx);
+        let pane_reset = self.reset_slot(
+            "reset-memory-pane",
+            0,
+            settings,
+            |s| s.alerts.memory_pane_gb,
+            |s, v| s.alerts.memory_pane_gb = v,
+            window,
+            cx,
+        );
+        rows.push(row(
+            theme,
+            "Pane memory",
+            "Notify when one pane uses this much memory. 0 turns it off.",
+            pane,
+            pane_reset,
+        ));
+        let total = self.stepper(&MEMORY_TOTAL, settings, window, cx);
+        let total_reset = self.reset_slot(
+            "reset-memory-total",
+            0,
+            settings,
+            |s| s.alerts.memory_total_gb,
+            |s, v| s.alerts.memory_total_gb = v,
+            window,
+            cx,
+        );
+        rows.push(row(
+            theme,
+            "Total memory",
+            "Notify when all panes together use this much memory. 0 turns it off.",
+            total,
+            total_reset,
         ));
         if cfg!(target_os = "macos") {
             rows.push(stacked_row(

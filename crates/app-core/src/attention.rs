@@ -388,6 +388,8 @@ mod tests {
             only_when_unfocused: false,
             play_sounds: true,
             volume: 1.0,
+            memory_pane_gb: 4,
+            memory_total_gb: 24,
         }
     }
 
