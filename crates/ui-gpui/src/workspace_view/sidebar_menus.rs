@@ -369,6 +369,7 @@ impl WorkspaceView {
                 self.save(cx);
             }
             SidebarEvent::OpenRecents => self.open_recents(&OpenRecents, window, cx),
+            SidebarEvent::OpenMemory => self.open_memory_view(window, cx),
             SidebarEvent::Dismiss => self.focus_current(window, cx),
             SidebarEvent::ShowSettings => self.open_settings(&OpenSettings, window, cx),
             SidebarEvent::CloseSettings => self.close_settings(window, cx),

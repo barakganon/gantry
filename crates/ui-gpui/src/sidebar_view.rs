@@ -110,6 +110,8 @@ pub enum SidebarEvent {
     OrderChanged(SidebarOrder),
     /// Open the recent sessions pop-up.
     OpenRecents,
+    /// Open the pane memory view.
+    OpenMemory,
     /// Give keyboard focus back to the pane.
     Dismiss,
     /// The Settings row was clicked: show Settings.
@@ -1737,6 +1739,25 @@ impl Render for SidebarView {
                     ),
             )
             .child(self.render_hosts(&theme, cx))
+            .when(!self.memory.is_empty(), |sidebar| {
+                sidebar.child(
+                    div()
+                        .id("pane-memory")
+                        .flex_none()
+                        .mx_3()
+                        .mt_2()
+                        .px_3()
+                        .flex()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(rgb(theme.tokens.muted))
+                        .cursor_pointer()
+                        .hover(|style| style.text_color(rgb(theme.tokens.text)))
+                        .child(div().flex_1().child("Pane memory"))
+                        .child(app_core::memory::short(self.memory.values().sum()))
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(SidebarEvent::OpenMemory))),
+                )
+            })
             .child(
                 div()
                     .id("recent-sessions")

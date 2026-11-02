@@ -430,6 +430,10 @@ pub struct WorkspaceView {
     memory: HashMap<PaneKey, u64>,
     /// Which memory limits are over, so each crossing warns once.
     memory_watch: app_core::memory::MemoryWatch<PaneKey>,
+    /// The pane memory view, while open: the panes picked in it.
+    memory_view: Option<HashSet<NodeId>>,
+    /// Keyboard focus of the pane memory view (Esc closes it).
+    memory_focus: FocusHandle,
     /// The timer that asks the daemons for them.
     memory_task: Option<Task<()>>,
     /// Take-over requests waiting for the host's daemon, by host and session.
@@ -658,6 +662,8 @@ impl WorkspaceView {
             git_task: None,
             memory: HashMap::new(),
             memory_watch: Default::default(),
+            memory_view: None,
+            memory_focus: cx.focus_handle(),
             memory_task: None,
             take_overs: HashMap::new(),
             pending_opens: HashMap::new(),

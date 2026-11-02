@@ -181,6 +181,7 @@ impl Render for WorkspaceView {
                         .child(view),
                 )
             })
+            .children(self.render_memory_view(&theme, cx))
             .when_some(self.recents.as_ref().map(|(view, _)| view.clone()), |root, view| {
                 root.child(
                     div()
