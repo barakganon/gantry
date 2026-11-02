@@ -6,6 +6,10 @@ use std::sync::mpsc;
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+/// How long a closed pane's processes get to exit after SIGHUP before they are killed.
+#[cfg(unix)]
+const KILL_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Everything needed to start a process in a PTY.
 #[derive(Clone, Debug)]
 pub struct SpawnSpec {
@@ -109,8 +113,20 @@ impl PtyProcess {
         if cfg!(target_os = "linux") { std::fs::read_link(format!("/proc/{pid}/cwd")).ok() } else { None }
     }
 
-    /// Terminate the process.
+    /// Terminate the process and everything in its process group (a Claude's MCP servers too): SIGHUP now, SIGKILL
+    /// to whatever is left after a grace period.
     pub fn kill(&mut self) -> std::io::Result<()> {
+        #[cfg(unix)]
+        if let Some(group) = self.pid.and_then(|pid| rustix::process::Pid::from_raw(pid as i32)) {
+            use rustix::process::{Signal, kill_process_group};
+            if kill_process_group(group, Signal::HUP).is_ok() {
+                std::thread::spawn(move || {
+                    std::thread::sleep(KILL_GRACE);
+                    let _ = kill_process_group(group, Signal::KILL);
+                });
+                return Ok(());
+            }
+        }
         self.killer.kill()
     }
 }
@@ -291,6 +307,24 @@ mod tests {
         pty.resize(100, 30).unwrap();
         let out = read_until(reader, "30 100", Duration::from_secs(5));
         assert!(out.contains("30 100"), "got: {out:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_ends_the_whole_process_group_even_children_ignoring_hangup() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = "(trap '' HUP; sleep 60) & echo child:$!; wait";
+        let (mut pty, reader) = PtyProcess::spawn(&sh(script, dir.path())).unwrap();
+        let out = read_until(reader, "\n", Duration::from_secs(5));
+        let child: u32 = out.trim().trim_start_matches("child:").parse().expect(&out);
+        let alive = || std::process::Command::new("kill").args(["-0", &child.to_string()]).status().unwrap().success();
+        assert!(alive());
+        pty.kill().unwrap();
+        let deadline = Instant::now() + KILL_GRACE + Duration::from_secs(3);
+        while alive() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(!alive(), "child {child} survived the kill");
     }
 
     #[cfg(unix)]
