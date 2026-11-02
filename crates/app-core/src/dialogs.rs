@@ -176,9 +176,9 @@ pub fn disconnect(host: &str, counts: &Counts) -> DialogSpec {
 /// Close a pane with a running process.
 pub fn close_pane(is_claude: bool) -> DialogSpec {
     let detail = if is_claude {
-        "Closing stops Claude. You can resume the conversation later."
+        "Closing stops Claude; you can resume the conversation later. Hiding keeps it running in the sidebar."
     } else {
-        "A command is still running. Closing stops it."
+        "A command is still running. Closing stops it; hiding keeps it running in the sidebar."
     };
     spec(
         "Close this pane?".into(),
@@ -186,9 +186,10 @@ pub fn close_pane(is_claude: bool) -> DialogSpec {
         Layout::Pills,
         vec![
             choice("Close pane", None, ChoiceStyle::Danger, false),
+            choice("Hide pane", None, ChoiceStyle::Plain, false),
             choice("Keep open", None, ChoiceStyle::Primary, true),
         ],
-        1,
+        2,
     )
 }
 
@@ -197,15 +198,16 @@ pub fn close_tab(running: usize) -> DialogSpec {
     spec(
         "Close this tab?".into(),
         Some(format!(
-            "Closing stops {running} running {}. You can resume Claude conversations later.",
+            "Closing stops {running} running {}; you can resume Claude conversations later. Hiding keeps them running in the sidebar.",
             if running == 1 { "session" } else { "sessions" }
         )),
         Layout::Pills,
         vec![
             choice("Close tab", None, ChoiceStyle::Danger, false),
+            choice("Hide tab", None, ChoiceStyle::Plain, false),
             choice("Keep open", None, ChoiceStyle::Primary, true),
         ],
-        1,
+        2,
     )
 }
 
@@ -461,11 +463,19 @@ mod tests {
     fn close_pane_copy() {
         let c = close_pane(true);
         assert_eq!(c.title, "Close this pane?");
-        assert_eq!(c.detail.as_deref(), Some("Closing stops Claude. You can resume the conversation later."));
-        assert_eq!(labels(&c), ["Close pane", "Keep open"]);
-        assert_eq!(styles(&c), [ChoiceStyle::Danger, ChoiceStyle::Primary]);
-        assert_eq!((focus(&c), c.escape, c.layout), (1, 1, Layout::Pills));
-        assert_eq!(close_pane(false).detail.as_deref(), Some("A command is still running. Closing stops it."));
+        assert_eq!(
+            c.detail.as_deref(),
+            Some(
+                "Closing stops Claude; you can resume the conversation later. Hiding keeps it running in the sidebar."
+            )
+        );
+        assert_eq!(labels(&c), ["Close pane", "Hide pane", "Keep open"]);
+        assert_eq!(styles(&c), [ChoiceStyle::Danger, ChoiceStyle::Plain, ChoiceStyle::Primary]);
+        assert_eq!((focus(&c), c.escape, c.layout), (2, 2, Layout::Pills));
+        assert_eq!(
+            close_pane(false).detail.as_deref(),
+            Some("A command is still running. Closing stops it; hiding keeps it running in the sidebar.")
+        );
     }
 
     #[test]
@@ -474,11 +484,14 @@ mod tests {
         assert_eq!(c.title, "Close this tab?");
         assert_eq!(
             c.detail.as_deref(),
-            Some("Closing stops 2 running sessions. You can resume Claude conversations later.")
+            Some(
+                "Closing stops 2 running sessions; you can resume Claude conversations later. Hiding keeps them \
+                 running in the sidebar."
+            )
         );
-        assert_eq!(labels(&c), ["Close tab", "Keep open"]);
-        assert_eq!(styles(&c), [ChoiceStyle::Danger, ChoiceStyle::Primary]);
-        assert_eq!((focus(&c), c.escape), (1, 1));
+        assert_eq!(labels(&c), ["Close tab", "Hide tab", "Keep open"]);
+        assert_eq!(styles(&c), [ChoiceStyle::Danger, ChoiceStyle::Plain, ChoiceStyle::Primary]);
+        assert_eq!((focus(&c), c.escape), (2, 2));
     }
 
     #[test]

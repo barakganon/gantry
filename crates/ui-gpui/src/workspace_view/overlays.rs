@@ -232,13 +232,11 @@ impl WorkspaceView {
                 }
                 _ => {}
             },
-            DialogAction::ClosePanes(leaves) => {
-                if index == 0 {
-                    for leaf in leaves {
-                        self.close_leaf(leaf, window, cx);
-                    }
-                }
-            }
+            DialogAction::ClosePanes(leaves) => match index {
+                0 => leaves.into_iter().for_each(|leaf| self.close_leaf(leaf, window, cx)),
+                1 => leaves.into_iter().for_each(|leaf| self.hide_leaf(leaf, window, cx)),
+                _ => {}
+            },
             DialogAction::TakeOver { host, session, target } => {
                 if index == 0
                     && let Some(client) = self.client(&host)

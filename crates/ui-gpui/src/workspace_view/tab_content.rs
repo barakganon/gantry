@@ -85,7 +85,7 @@ impl WorkspaceView {
                     }),
                 )
         };
-        let close_title = "Close pane (keeps running)".to_string();
+        let close_title = "Close or hide pane".to_string();
         let close_card =
             HoverCard { title: close_title, status: None, dir: None, container: false, host: None, folder: None };
         let danger = theme.tokens.danger;
@@ -120,7 +120,7 @@ impl WorkspaceView {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _: &MouseDownEvent, window, cx| {
-                            this.hide_leaf(leaf, window, cx);
+                            this.confirm_close(vec![leaf], window, cx);
                             window.prevent_default();
                             cx.stop_propagation();
                         }),
