@@ -74,9 +74,13 @@ pub fn wrapped_claude_owner(
     None
 }
 
-/// Resident bytes of each pane's process and all its descendants. Rows are `ps -A -o pid= -o ppid= -o rss=` lines
-/// (rss in KiB); panes with no row are left out.
-pub fn memory_by_pane(ps_output: &str, panes: &HashMap<u32, PaneId>) -> Vec<(PaneId, u64)> {
+/// Bytes of each pane's process and all its descendants. Rows are `ps -A -o pid= -o ppid= -o rss=` lines (rss in
+/// KiB); a process's size is its `footprint` when known, else its rss. Panes with no row are left out.
+pub fn memory_by_pane(
+    ps_output: &str,
+    footprint: &HashMap<u32, u64>,
+    panes: &HashMap<u32, PaneId>,
+) -> Vec<(PaneId, u64)> {
     let rows: Vec<(u32, u32, u64)> = ps_output
         .lines()
         .filter_map(|line| {
@@ -89,7 +93,7 @@ pub fn memory_by_pane(ps_output: &str, panes: &HashMap<u32, PaneId>) -> Vec<(Pan
     let mut totals: HashMap<PaneId, u64> = HashMap::new();
     for &(pid, _, rss) in &rows {
         if let Some(pane) = panes.get(&pid).copied().or_else(|| owner(pid, &parents, panes)) {
-            *totals.entry(pane).or_default() += rss * 1024;
+            *totals.entry(pane).or_default() += footprint.get(&pid).copied().unwrap_or(rss * 1024);
         }
     }
     let mut totals: Vec<_> = totals.into_iter().collect();
@@ -97,10 +101,43 @@ pub fn memory_by_pane(ps_output: &str, panes: &HashMap<u32, PaneId>) -> Vec<(Pan
     totals
 }
 
+/// Each process's physical footprint from `top -l 1 -stats pid,mem` output (`1009M`, `944K`, `2G+`): what Activity
+/// Monitor shows, compressed and swapped memory included, which rss leaves out.
+pub fn parse_top(output: &str) -> HashMap<u32, u64> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse().ok()?;
+            let mem = fields.next()?.trim_end_matches(['+', '-']);
+            let unit = match mem.chars().last()? {
+                'B' => 1,
+                'K' => 1 << 10,
+                'M' => 1 << 20,
+                'G' => 1 << 30,
+                'T' => 1 << 40,
+                _ => return None,
+            };
+            Some((pid, mem[..mem.len() - 1].parse::<u64>().ok()? * unit))
+        })
+        .collect()
+}
+
 /// [`memory_by_pane`] for the running processes; empty when `ps` cannot be run.
 pub fn read_memory(panes: &HashMap<u32, PaneId>) -> Vec<(PaneId, u64)> {
+    let footprint = if cfg!(target_os = "macos") {
+        Command::new("top")
+            .args(["-l", "1", "-stats", "pid,mem"])
+            .output()
+            .map(|output| parse_top(&String::from_utf8_lossy(&output.stdout)))
+            .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
     match Command::new("ps").args(["-A", "-o", "pid=", "-o", "ppid=", "-o", "rss="]).output() {
-        Ok(output) if output.status.success() => memory_by_pane(&String::from_utf8_lossy(&output.stdout), panes),
+        Ok(output) if output.status.success() => {
+            memory_by_pane(&String::from_utf8_lossy(&output.stdout), &footprint, panes)
+        }
         _ => Vec::new(),
     }
 }
@@ -201,6 +238,17 @@ not a process line
         // Pane 1 = pid 10 with a child and a grandchild; pane 2 = pid 20 alone; pid 30 is no pane's.
         let ps = "10 1 100\n11 10 50\n12 11 25\n20 1 7\n30 1 999\nbad line\n";
         let panes = HashMap::from([(10, 1), (20, 2)]);
-        assert_eq!(memory_by_pane(ps, &panes), [(1, 175 * 1024), (2, 7 * 1024)]);
+        assert_eq!(memory_by_pane(ps, &HashMap::new(), &panes), [(1, 175 * 1024), (2, 7 * 1024)]);
+        // A known footprint counts instead of the rss.
+        let footprint = HashMap::from([(10, 1 << 30)]);
+        assert_eq!(memory_by_pane(ps, &footprint, &panes)[0].1, 175 * 1024 - 100 * 1024 + (1 << 30));
+    }
+
+    #[test]
+    fn top_footprints_parse_with_units() {
+        let top = "Processes: 703 total\n\nPID   MEM  \n3530  1009M\n7313  944K \n9     2G+\n10    12B-\n";
+        let parsed = parse_top(top);
+        assert_eq!(parsed.len(), 4);
+        assert_eq!((parsed[&3530], parsed[&7313], parsed[&9], parsed[&10]), (1009 << 20, 944 << 10, 2 << 30, 12));
     }
 }

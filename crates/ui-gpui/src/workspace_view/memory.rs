@@ -25,7 +25,7 @@ struct MemoryRow {
 }
 
 /// How often the daemons are asked for each pane's memory.
-const MEMORY_INTERVAL: Duration = Duration::from_secs(5);
+const MEMORY_INTERVAL: Duration = Duration::from_secs(10);
 
 impl WorkspaceView {
     /// Every `MEMORY_INTERVAL`: ask each connected daemon that reports memory for its panes'.
