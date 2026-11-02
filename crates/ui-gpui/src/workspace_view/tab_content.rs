@@ -366,6 +366,7 @@ impl WorkspaceView {
                 let project = self.leaf_project_color(leaf, cx);
                 let marker = self.workspace.leaf_color(leaf).map(|tint| tint.value(theme.preset));
                 let git_chip = self.git_chip_of(leaf, ("git-chip-pane", index), &theme, cx);
+                let memory = self.workspace.leaves.get(&leaf).and_then(|entry| self.memory.get(&entry.key()?)).copied();
                 let folder = self
                     .workspace
                     .leaves
@@ -490,6 +491,7 @@ impl WorkspaceView {
                                                         project,
                                                         marker,
                                                         git_chip,
+                                                        memory,
                                                         picked,
                                                         pop_out,
                                                         title_field,
@@ -614,6 +616,7 @@ fn pane_header(
     project: Option<u32>,
     marker: Option<u32>,
     git_chip: Option<gpui::Stateful<Div>>,
+    memory: Option<u64>,
     picked: bool,
     pop_out: gpui::Stateful<Div>,
     title_field: Option<Div>,
@@ -660,6 +663,14 @@ fn pane_header(
         })
         .children(pin)
         .child(title_field.unwrap_or_else(|| div().flex_1().min_w_0().truncate().child(title)))
+        .children(memory.map(|bytes| {
+            let ink = colors.map_or(theme.tokens.text, |colors| colors.ink);
+            div()
+                .flex_none()
+                .font_weight(FontWeight::NORMAL)
+                .text_color(rgba((ink << 8) | 0xcc))
+                .child(app_core::memory::short(bytes))
+        }))
         .children(git_chip)
         .when(container, |header| {
             header.child(container_icon(colors.map_or(theme.tokens.text, |colors| colors.ink), theme))
