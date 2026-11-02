@@ -52,6 +52,37 @@ pub fn owner(pid: u32, parents: &HashMap<u32, u32>, panes: &HashMap<u32, PaneId>
     None
 }
 
+/// Resident bytes of each pane's process and all its descendants. Rows are `ps -A -o pid= -o ppid= -o rss=` lines
+/// (rss in KiB); panes with no row are left out.
+pub fn memory_by_pane(ps_output: &str, panes: &HashMap<u32, PaneId>) -> Vec<(PaneId, u64)> {
+    let rows: Vec<(u32, u32, u64)> = ps_output
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace().map(str::parse::<u64>);
+            let (pid, ppid, rss) = (fields.next()?.ok()?, fields.next()?.ok()?, fields.next()?.ok()?);
+            Some((u32::try_from(pid).ok()?, u32::try_from(ppid).ok()?, rss))
+        })
+        .collect();
+    let parents: HashMap<u32, u32> = rows.iter().map(|&(pid, ppid, _)| (pid, ppid)).collect();
+    let mut totals: HashMap<PaneId, u64> = HashMap::new();
+    for &(pid, _, rss) in &rows {
+        if let Some(pane) = panes.get(&pid).copied().or_else(|| owner(pid, &parents, panes)) {
+            *totals.entry(pane).or_default() += rss * 1024;
+        }
+    }
+    let mut totals: Vec<_> = totals.into_iter().collect();
+    totals.sort_unstable();
+    totals
+}
+
+/// [`memory_by_pane`] for the running processes; empty when `ps` cannot be run.
+pub fn read_memory(panes: &HashMap<u32, PaneId>) -> Vec<(PaneId, u64)> {
+    match Command::new("ps").args(["-A", "-o", "pid=", "-o", "ppid=", "-o", "rss="]).output() {
+        Ok(output) if output.status.success() => memory_by_pane(&String::from_utf8_lossy(&output.stdout), panes),
+        _ => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +158,13 @@ not a process line
         let _ = outer.kill();
         let _ = outer.wait();
         assert!(found.is_some(), "no descendant of the outer shell found through ps");
+    }
+
+    #[test]
+    fn memory_sums_each_panes_whole_tree() {
+        // Pane 1 = pid 10 with a child and a grandchild; pane 2 = pid 20 alone; pid 30 is no pane's.
+        let ps = "10 1 100\n11 10 50\n12 11 25\n20 1 7\n30 1 999\nbad line\n";
+        let panes = HashMap::from([(10, 1), (20, 2)]);
+        assert_eq!(memory_by_pane(ps, &panes), [(1, 175 * 1024), (2, 7 * 1024)]);
     }
 }

@@ -169,6 +169,11 @@ pub enum ClientEvent {
         /// Why.
         reason: String,
     },
+    /// The answer to `pane_memory`: resident bytes of each pane's process tree.
+    PaneMemory {
+        /// Pane and bytes.
+        panes: Vec<(PaneId, u64)>,
+    },
     /// Another GUI took over the daemon.
     TakenOver,
     /// The connection to the daemon was lost.
@@ -211,6 +216,8 @@ pub struct DaemonClient {
     outgoing: mpsc::UnboundedSender<Outgoing>,
     /// Whether the daemon's `Welcome` said it saves pasted images (set once the handshake is done).
     paste_image: bool,
+    /// Whether the daemon's `Welcome` said it answers `PaneMemory`.
+    pane_memory: bool,
 }
 
 /// What the handshake returned.
@@ -220,6 +227,7 @@ pub(crate) struct Hello {
     pub(crate) daemon_version: Option<String>,
     pub(crate) daemon_commit: Option<String>,
     pub(crate) paste_image: bool,
+    pub(crate) pane_memory: bool,
     pub(crate) panes: Vec<PaneInfo>,
 }
 
@@ -347,6 +355,17 @@ impl DaemonClient {
         self.send(&ClientMessage::SavePasteImage { pane, format, data });
     }
 
+    /// Whether this daemon reports memory per pane (`pane_memory`); false for a daemon from before the feature.
+    pub fn reports_memory(&self) -> bool {
+        self.pane_memory
+    }
+
+    /// Ask how much memory each pane's processes use; answered by `PaneMemory`. Only for a daemon whose
+    /// `reports_memory` is true.
+    pub fn pane_memory(&self) {
+        self.send(&ClientMessage::PaneMemory);
+    }
+
     /// Send keyboard/paste input to a pane.
     pub fn input(&self, pane: PaneId, bytes: &[u8]) {
         let _ = self.outgoing.send(Outgoing::Frame(Frame::Data { pane, bytes: bytes.to_vec() }));
@@ -398,7 +417,12 @@ impl Link {
     pub(crate) fn new() -> Link {
         let (outgoing_tx, outgoing) = mpsc::unbounded_channel();
         let (events_tx, events) = async_channel::bounded(EVENT_QUEUE);
-        Link { client: DaemonClient { outgoing: outgoing_tx, paste_image: false }, outgoing, events_tx, events }
+        Link {
+            client: DaemonClient { outgoing: outgoing_tx, paste_image: false, pane_memory: false },
+            outgoing,
+            events_tx,
+            events,
+        }
     }
 }
 
@@ -408,8 +432,9 @@ pub(crate) fn connection(
     hello: Hello,
     events: async_channel::Receiver<ClientEvent>,
 ) -> Connection {
-    let Hello { instance, claude_dir, daemon_version, daemon_commit, paste_image, panes } = hello;
+    let Hello { instance, claude_dir, daemon_version, daemon_commit, paste_image, pane_memory, panes } = hello;
     client.paste_image = paste_image;
+    client.pane_memory = pane_memory;
     Connection { client, instance, claude_dir, daemon_version, daemon_commit, panes, events }
 }
 
@@ -480,6 +505,7 @@ where
                     ClientEvent::GitUnavailable { request, problem }
                 }
                 Some(Ok(DaemonMessage::PasteImageSaved { pane, path })) => ClientEvent::PasteImageSaved { pane, path },
+                Some(Ok(DaemonMessage::PaneMemory { panes })) => ClientEvent::PaneMemory { panes },
                 Some(Ok(DaemonMessage::PasteImageFailed { pane, reason })) => {
                     ClientEvent::PasteImageFailed { pane, reason }
                 }
@@ -534,19 +560,20 @@ where
 {
     let io = |err: io::Error| StartError::Io(err.into());
     write_frame(send, &Frame::control(&ClientMessage::Hello { protocol: PROTOCOL_VERSION })).await.map_err(io)?;
-    let (instance, claude_dir, daemon_version, daemon_commit, paste_image) = match next_message(recv).await? {
-        DaemonMessage::Welcome { instance, claude_dir, app_version, app_commit, paste_image, .. } => {
-            (instance, claude_dir, app_version, app_commit, paste_image)
-        }
-        DaemonMessage::VersionMismatch { daemon_protocol } => {
-            return Err(StartError::VersionMismatch { daemon_protocol });
-        }
-        other => return Err(StartError::Io(anyhow::anyhow!("unexpected handshake reply {other:?}"))),
-    };
+    let (instance, claude_dir, daemon_version, daemon_commit, paste_image, pane_memory) =
+        match next_message(recv).await? {
+            DaemonMessage::Welcome {
+                instance, claude_dir, app_version, app_commit, paste_image, pane_memory, ..
+            } => (instance, claude_dir, app_version, app_commit, paste_image, pane_memory),
+            DaemonMessage::VersionMismatch { daemon_protocol } => {
+                return Err(StartError::VersionMismatch { daemon_protocol });
+            }
+            other => return Err(StartError::Io(anyhow::anyhow!("unexpected handshake reply {other:?}"))),
+        };
     write_frame(send, &Frame::control(&ClientMessage::ListPanes)).await.map_err(io)?;
     loop {
         if let DaemonMessage::Panes { panes } = next_message(recv).await? {
-            return Ok(Hello { instance, claude_dir, daemon_version, daemon_commit, paste_image, panes });
+            return Ok(Hello { instance, claude_dir, daemon_version, daemon_commit, paste_image, pane_memory, panes });
         }
     }
 }

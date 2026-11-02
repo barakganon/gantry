@@ -499,6 +499,7 @@ async fn handle_connection(shared: Arc<Shared>, stream: Stream) {
             app_version: Some(protocol::build::VERSION.into()),
             app_commit: Some(protocol::build::COMMIT.into()),
             paste_image: shared.paste_dir.is_some(),
+            pane_memory: true,
         }));
         state.client = Some(Client { id, outbox: outbox.clone(), attached: HashSet::new(), kicked: kicked.clone() });
         id
@@ -754,6 +755,7 @@ fn handle_message(shared: &Arc<Shared>, client_id: u64, message: ClientMessage) 
         }
         ClientMessage::ListDir { request, path } => list_dir_request(shared, request, path),
         ClientMessage::SavePasteImage { pane, format, data } => paste_image_request(shared, pane, format, data),
+        ClientMessage::PaneMemory => pane_memory_request(shared),
         ClientMessage::GitStatus { request, folder, known_head } => {
             git_status_request(shared, request, folder, known_head)
         }
@@ -940,6 +942,17 @@ fn paste_image_request(shared: &Arc<Shared>, pane: PaneId, format: ImageFormat, 
             }
         };
         shared.lock().control(&reply);
+    });
+}
+
+/// Answer `PaneMemory` off the async threads.
+fn pane_memory_request(shared: &Arc<Shared>) {
+    let pane_pids: HashMap<u32, PaneId> =
+        shared.lock().panes.iter().filter_map(|(id, p)| Some((p.pty.pid()?, *id))).collect();
+    let shared = shared.clone();
+    tokio::task::spawn_blocking(move || {
+        let panes = crate::process_tree::read_memory(&pane_pids);
+        shared.lock().control(&DaemonMessage::PaneMemory { panes });
     });
 }
 

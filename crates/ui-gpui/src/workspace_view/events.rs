@@ -38,6 +38,7 @@ impl WorkspaceView {
                         slot.view.update(cx, |view, cx| view.on_event(&event, cx));
                     }
                 }
+                ClientEvent::PaneMemory { panes } => self.on_pane_memory(host, panes, cx),
                 ClientEvent::Exited { pane, code } => {
                     if let Some(leaf) = self.workspace.pane_exited(&PaneKey::new(host.clone(), *pane)) {
                         self.slots[&leaf].view.update(cx, |view, cx| view.exited(Some(*code), cx));

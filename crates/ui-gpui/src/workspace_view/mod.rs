@@ -90,6 +90,7 @@ mod events;
 mod git;
 mod hosts;
 mod layout;
+mod memory;
 mod overlays;
 mod panes;
 mod render;
@@ -425,6 +426,10 @@ pub struct WorkspaceView {
     git_bars: git_scrollbar::Bars,
     /// The timer that asks the daemons for them when due.
     git_task: Option<Task<()>>,
+    /// Resident bytes of each pane's processes, as its daemon last reported.
+    memory: HashMap<PaneKey, u64>,
+    /// The timer that asks the daemons for them.
+    memory_task: Option<Task<()>>,
     /// Take-over requests waiting for the host's daemon, by host and session.
     take_overs: HashMap<(HostId, String), TakeOverTarget>,
     /// New sessions waiting for `ContainerFound`, by request id.
@@ -649,6 +654,8 @@ impl WorkspaceView {
             git_scroll: UniformListScrollHandle::new(),
             git_bars: git_scrollbar::Bars::new(),
             git_task: None,
+            memory: HashMap::new(),
+            memory_task: None,
             take_overs: HashMap::new(),
             pending_opens: HashMap::new(),
             welcome_items: RefCell::new(None),
@@ -671,6 +678,7 @@ impl WorkspaceView {
         cx.set_global(CheckRow::default());
         this.release_task = Some(this.start_release_timer(cx));
         this.git_task = Some(Self::start_git_timer(window, cx));
+        this.memory_task = Some(Self::start_memory_timer(window, cx));
         let leaves: Vec<NodeId> = this.workspace.leaves.keys().copied().collect();
         for leaf in leaves {
             this.add_slot(leaf, window, cx);

@@ -330,6 +330,9 @@ pub enum ClientMessage {
         #[serde(with = "base64_bytes")]
         data: Vec<u8>,
     },
+    /// How much memory each pane's processes use; answered by `PaneMemory`. Only sent to a daemon whose
+    /// `Welcome.pane_memory` is true (no protocol bump: older daemons never see it).
+    PaneMemory,
     /// Git state of the repo containing `folder` (absolute, or starting with `~`); answered by `GitStatus` or
     /// `GitUnavailable`.
     GitStatus {
@@ -565,6 +568,9 @@ pub enum DaemonMessage {
         /// The daemon answers `SavePasteImage`; older daemons send none.
         #[serde(default)]
         paste_image: bool,
+        /// The daemon answers `PaneMemory`; older daemons send none.
+        #[serde(default)]
+        pane_memory: bool,
     },
     /// Handshake rejected; only `StopAll` is accepted afterwards.
     VersionMismatch {
@@ -687,6 +693,11 @@ pub enum DaemonMessage {
         /// Why, readable.
         reason: String,
     },
+    /// The answer to `PaneMemory`: resident bytes of each live pane's process and all its descendants.
+    PaneMemory {
+        /// Pane and bytes; panes whose process is unknown are left out.
+        panes: Vec<(PaneId, u64)>,
+    },
     /// The answer to `GitStatus`.
     GitStatus {
         /// Echoed request id.
@@ -788,6 +799,7 @@ mod tests {
                 app_version: Some("0.3.0".into()),
                 app_commit: Some("a1b2c3d".into()),
                 paste_image: true,
+                pane_memory: true,
             },
             DaemonMessage::Welcome {
                 protocol: PROTOCOL_VERSION,
@@ -796,6 +808,7 @@ mod tests {
                 app_version: None,
                 app_commit: None,
                 paste_image: false,
+                pane_memory: false,
             },
             DaemonMessage::Spawned { request: 3, pane: 9, cwd: "/srv".into() },
         ] {
@@ -926,7 +939,8 @@ mod tests {
                 claude_dir: None,
                 app_version: None,
                 app_commit: None,
-                paste_image: false
+                paste_image: false,
+                pane_memory: false
             }
         );
         let new = DaemonMessage::Welcome {
@@ -936,6 +950,7 @@ mod tests {
             app_version: Some("0.3.0".into()),
             app_commit: Some("a1b2c3d".into()),
             paste_image: true,
+            pane_memory: true,
         };
         let json = serde_json::to_string(&new).unwrap();
         assert_eq!(serde_json::from_str::<DaemonMessage>(&json).unwrap(), new);
@@ -956,7 +971,8 @@ mod tests {
                 claude_dir: None,
                 app_version: None,
                 app_commit: None,
-                paste_image: false
+                paste_image: false,
+                pane_memory: false
             }
         );
         let spawn = r#"{"program":"sh","args":[],"cwd":"/","cols":80,"rows":24}"#;
@@ -980,6 +996,7 @@ mod tests {
         for reply in [
             DaemonMessage::PasteImageSaved { pane: 4, path: "/run/user/1000/gantry-dev/paste/a.png".into() },
             DaemonMessage::PasteImageFailed { pane: 4, reason: "no such pane".into() },
+            DaemonMessage::PaneMemory { panes: vec![(4, 512 << 20), (7, 0)] },
         ] {
             let json = serde_json::to_string(&reply).unwrap();
             assert_eq!(serde_json::from_str::<DaemonMessage>(&json).unwrap(), reply);
@@ -990,7 +1007,7 @@ mod tests {
     fn welcome_without_paste_image_is_false() {
         let old = r#"{"type":"welcome","protocol":10,"instance":"x"}"#;
         match serde_json::from_str::<DaemonMessage>(old).unwrap() {
-            DaemonMessage::Welcome { paste_image, .. } => assert!(!paste_image),
+            DaemonMessage::Welcome { paste_image, pane_memory, .. } => assert!(!paste_image && !pane_memory),
             other => panic!("expected Welcome, got {other:?}"),
         }
     }

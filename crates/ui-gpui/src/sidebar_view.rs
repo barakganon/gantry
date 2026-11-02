@@ -1,7 +1,7 @@
 //! The sidebar: the Active list (every pane and every Claude session running outside Gantry, by project), colored
 //! by what each needs, with a fuzzy filter.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -182,6 +182,8 @@ pub struct SidebarView {
     together: Vec<Activation>,
     /// The workspace's focused leaf; its row is selected unless the user moved the ring.
     focused_leaf: Option<NodeId>,
+    /// Resident bytes of each leaf's processes, shown on its row.
+    memory: HashMap<NodeId, u64>,
     /// The open right-click menu of a row or heading.
     menu: Option<OpenMenu>,
     scroll: UniformListScrollHandle,
@@ -247,6 +249,7 @@ impl SidebarView {
             selected: None,
             together: Vec::new(),
             focused_leaf: None,
+            memory: HashMap::new(),
             menu: None,
             scroll: UniformListScrollHandle::new(),
             home: std::env::home_dir(),
@@ -563,6 +566,14 @@ impl SidebarView {
         self.selected =
             leaf.and_then(|leaf| session_tree::row_of_leaf(&self.rows, leaf)).map(|index| self.rows[index].key());
         cx.notify();
+    }
+
+    /// Memory of each leaf's processes, for the rows.
+    pub fn set_memory(&mut self, memory: HashMap<NodeId, u64>, cx: &mut Context<Self>) {
+        if memory != self.memory {
+            self.memory = memory;
+            cx.notify();
+        }
     }
 
     /// The order saved in the layout: where projects and tabs sit until the user moves them.
@@ -1155,6 +1166,9 @@ impl SidebarView {
         let title = |text: String| div().flex_1().min_w_0().truncate().child(text);
         let aside =
             |text: String, ink: u32| div().flex_none().text_xs().text_color(rgba((ink << 8) | 0xcc)).child(text);
+        let memory = |leaf: Option<NodeId>, ink: u32| {
+            leaf.and_then(|leaf| self.memory.get(&leaf)).map(|bytes| aside(app_core::memory::short(*bytes), ink))
+        };
         let guide = row
             .in_tab
             .then(|| div().absolute().left(theme.ui(30.)).top_0().bottom_0().w(px(2.)).bg(rgb(theme.tokens.line)));
@@ -1272,6 +1286,7 @@ impl SidebarView {
                         )
                         .when(session.container.is_some(), |pill| pill.child(container_icon(colors.ink, &theme)))
                         .when(!session.host.is_local(), |pill| pill.child(ssh_icon(colors.ink, &theme)))
+                        .children(memory(*leaf, colors.ink))
                         .children(close)
                         .children(project()),
                 )
@@ -1295,6 +1310,7 @@ impl SidebarView {
                                 .unwrap_or_else(|| title(entry.title.clone())),
                         )
                         .when(!entry.host.is_local(), |pill| pill.child(ssh_icon(theme.tokens.muted, &theme)))
+                        .children(memory(Some(entry.leaf), theme.tokens.muted))
                         .children(project())
                         .children(close),
                 )
@@ -1319,6 +1335,7 @@ impl SidebarView {
                         .children(lead_mark(*tone, &colors, &theme))
                         .child(title("New session".into()))
                         .when(!entry.host.is_local(), |pill| pill.child(ssh_icon(colors.ink, &theme)))
+                        .children(memory(Some(entry.leaf), colors.ink))
                         .children(project())
                         .children(close),
                 )
