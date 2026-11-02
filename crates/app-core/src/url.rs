@@ -67,9 +67,34 @@ pub fn path_at(line: &str, col: usize) -> Option<PathLink> {
     })
 }
 
+/// Documents and media: they open in their default app rather than an editor.
+const DOCUMENTS: &[&str] = &[
+    "html", "htm", "pdf", "png", "jpg", "jpeg", "gif", "webp", "heic", "bmp", "tiff", "ico", "mp4", "mov", "m4v",
+    "webm", "mp3", "wav", "m4a", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "key", "numbers", "pages", "zip", "dmg",
+    "pkg", "app", "dxf", "dwg",
+];
+
+/// Whether a file at `path` belongs in a code editor: anything but documents and media.
+pub fn opens_in_editor(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_none_or(|ext| !DOCUMENTS.contains(&ext.to_ascii_lowercase().as_str()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn documents_open_in_their_app_and_code_in_the_editor() {
+        use std::path::Path;
+        for path in ["report.html", "plan.PDF", "shot.png", "deck.pptx"] {
+            assert!(!opens_in_editor(Path::new(path)), "{path}");
+        }
+        for path in ["main.rs", "notes.md", "data.json", "Makefile", "data.csv"] {
+            assert!(opens_in_editor(Path::new(path)), "{path}");
+        }
+    }
 
     #[test]
     fn finds_paths_with_lines_and_skips_plain_words() {

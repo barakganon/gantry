@@ -1755,12 +1755,14 @@ enum LinkTarget {
 
 const VSCODE: &str = "/Applications/Visual Studio Code.app";
 
-/// URLs open in the browser; files in VS Code when it is installed (at their line), else in their default app; folders
-/// in Finder.
+/// URLs open in the browser; code and text files in VS Code when it is installed (at their line); documents, media and
+/// everything else in their default app; folders in Finder.
 fn open_link(target: LinkTarget, cx: &mut App) {
     match target {
         LinkTarget::Url(url) => cx.open_url(&url),
-        LinkTarget::Path(path, line, column) if path.is_file() && Path::new(VSCODE).exists() => {
+        LinkTarget::Path(path, line, column)
+            if path.is_file() && app_core::url::opens_in_editor(&path) && Path::new(VSCODE).exists() =>
+        {
             let at = line.map(|line| format!(":{line}:{}", column.unwrap_or(1))).unwrap_or_default();
             cx.open_url(&format!("vscode://file{}{at}", path.display().to_string().replace(' ', "%20")));
         }
