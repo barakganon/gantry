@@ -103,6 +103,8 @@ pub enum MenuAction {
     CustomColor(ColorTarget),
     /// Open the sessions picked with Shift-click side by side, four to a tab.
     OpenTogether,
+    /// Close (or hide) the open panes picked with Shift-click.
+    CloseTogether,
     /// Add a pane to the picks to open together, or take it out.
     TogglePick(NodeId),
     /// Make a pane of a split tab a tab of its own; it keeps running.
@@ -230,9 +232,14 @@ pub fn pane_menu(leaf: NodeId, picked: bool, picks: usize) -> Vec<MenuItem> {
     items
 }
 
-/// The menu of a row among several picked with Shift-click.
-pub fn together_menu(count: usize) -> Vec<MenuItem> {
-    vec![entry(&format!("Open {count} together"), MenuAction::OpenTogether)]
+/// The menu of a row among several picked with Shift-click; `panes` of them are open panes.
+pub fn together_menu(count: usize, panes: usize) -> Vec<MenuItem> {
+    let mut items = vec![entry(&format!("Open {count} together"), MenuAction::OpenTogether)];
+    if panes > 0 {
+        let noun = if panes == 1 { "pane" } else { "panes" };
+        items.push(entry(&format!("Close {panes} {noun}…"), MenuAction::CloseTogether));
+    }
+    items
 }
 
 /// The right-click menu of the terminal: a misspelled word's suggestions and Learn Spelling, Cut (a selection on the

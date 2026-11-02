@@ -211,6 +211,24 @@ pub fn close_tab(running: usize) -> DialogSpec {
     )
 }
 
+/// Close several panes picked in the sidebar, `running` of them with running processes.
+pub fn close_panes(count: usize, running: usize) -> DialogSpec {
+    spec(
+        format!("Close {count} panes?"),
+        Some(format!(
+            "Closing stops {running} running {}; you can resume Claude conversations later. Hiding keeps them running in the sidebar.",
+            if running == 1 { "session" } else { "sessions" }
+        )),
+        Layout::Pills,
+        vec![
+            choice("Close all", None, ChoiceStyle::Danger, false),
+            choice("Hide all", None, ChoiceStyle::Plain, false),
+            choice("Keep open", None, ChoiceStyle::Primary, true),
+        ],
+        2,
+    )
+}
+
 /// Take over a session running outside Gantry (on `host` when it is remote).
 pub fn take_over(host: Option<&str>) -> DialogSpec {
     let title = match host {
@@ -495,6 +513,15 @@ mod tests {
     }
 
     #[test]
+    fn close_panes_copy() {
+        let c = close_panes(3, 1);
+        assert_eq!(c.title, "Close 3 panes?");
+        assert!(c.detail.as_deref().is_some_and(|detail| detail.starts_with("Closing stops 1 running session;")));
+        assert_eq!(labels(&c), ["Close all", "Hide all", "Keep open"]);
+        assert_eq!((focus(&c), c.escape), (2, 2));
+    }
+
+    #[test]
     fn take_over_copy() {
         let t = take_over(None);
         assert_eq!(t.title, "Take over this session?");
@@ -581,6 +608,7 @@ mod tests {
             close_pane(true),
             close_pane(false),
             close_tab(1),
+            close_panes(2, 2),
             take_over(None),
             force_quit(),
             cannot_take_over("h"),

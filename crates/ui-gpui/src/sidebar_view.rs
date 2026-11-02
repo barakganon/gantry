@@ -831,7 +831,10 @@ impl SidebarView {
             .map(|pane| (pane.leaf, pane.color));
         let alone = |leaf: NodeId| self.panes.iter().find(|pane| pane.leaf == leaf).is_none_or(|pane| pane.alone);
         let items = match &row.kind {
-            _ if self.together.len() > 1 && self.is_picked(row) => Some(menus::together_menu(self.together.len())),
+            _ if self.together.len() > 1 && self.is_picked(row) => {
+                let panes = self.together.iter().filter(|pick| matches!(pick, Activation::FocusLeaf(_))).count();
+                Some(menus::together_menu(self.together.len(), panes))
+            }
             RowKind::Project { path, .. } => {
                 // The dev container one of its listed sessions runs in.
                 let container = self.rows[index + 1..]

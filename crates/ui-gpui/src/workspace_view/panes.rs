@@ -551,4 +551,14 @@ impl WorkspaceView {
         };
         self.open_dialog(spec, DialogAction::ClosePanes(leaves), window, cx);
     }
+
+    /// Like `confirm_close`, for panes picked in the sidebar rather than a tab.
+    pub(super) fn confirm_close_picked(&mut self, leaves: Vec<NodeId>, window: &mut Window, cx: &mut Context<Self>) {
+        let running = self.running_panes(&leaves, cx);
+        if leaves.len() < 2 || running == 0 {
+            return self.confirm_close(leaves, window, cx);
+        }
+        let spec = dialogs::close_panes(leaves.len(), running);
+        self.open_dialog(spec, DialogAction::ClosePanes(leaves), window, cx);
+    }
 }

@@ -26,6 +26,18 @@ impl WorkspaceView {
     /// Do what a right-click menu entry says.
     /// Open the sessions picked in the sidebar as 2×2 grids, a new tab per four: closed ones are resumed first, open
     /// ones are moved out of their tabs.
+    fn close_together(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let picked = self.sidebar.update(cx, |sidebar, cx| sidebar.take_together(cx));
+        let leaves: Vec<NodeId> = picked
+            .into_iter()
+            .filter_map(|pick| match pick {
+                Activation::FocusLeaf(leaf) => Some(leaf),
+                _ => None,
+            })
+            .collect();
+        self.confirm_close_picked(leaves, window, cx);
+    }
+
     fn open_together(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let picked = self.sidebar.update(cx, |sidebar, cx| sidebar.take_together(cx));
         let mut leaves = Vec::new();
@@ -134,6 +146,7 @@ impl WorkspaceView {
                 self.rerun_leaf(leaf, window, cx);
             }
             MenuAction::OpenTogether => self.open_together(window, cx),
+            MenuAction::CloseTogether => self.close_together(window, cx),
             MenuAction::TogglePick(leaf) => {
                 self.sidebar.update(cx, |sidebar, cx| sidebar.toggle_pick(Activation::FocusLeaf(leaf), cx));
             }
