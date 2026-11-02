@@ -274,8 +274,15 @@ impl State {
             self.unowned.extend(live);
             return;
         };
+        let claudes: HashSet<u32> = records
+            .iter()
+            .filter_map(|r| match r.state {
+                IndexState::Running { pid } => Some(pid),
+                _ => None,
+            })
+            .collect();
         for pid in live {
-            match process_tree::owner(pid, &parents, &pane_pids) {
+            match process_tree::wrapped_claude_owner(pid, &parents, &pane_pids, &claudes) {
                 Some(pane) => {
                     self.owned.insert(pid, pane);
                 }

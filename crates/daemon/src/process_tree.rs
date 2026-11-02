@@ -1,7 +1,7 @@
 //! Which pane a running process descends from. A Claude started through a wrapper (a launcher that starts a child
 //! that starts the real Claude) writes its pid file from the innermost process, not from the pane's own.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Command;
 
 use protocol::message::PaneId;
@@ -47,6 +47,28 @@ pub fn owner(pid: u32, parents: &HashMap<u32, u32>, panes: &HashMap<u32, PaneId>
         }
         if current <= 1 || current == pid {
             return None;
+        }
+    }
+    None
+}
+
+/// The pane a running Claude (`pid`) was started for through a wrapper: its [`owner`], unless another running Claude
+/// (one of `claudes`, the pane's own included) is on the way up. That one is a Claude this Claude started (a headless
+/// `claude -p` from a tool or script), not the pane's.
+pub fn wrapped_claude_owner(
+    pid: u32,
+    parents: &HashMap<u32, u32>,
+    panes: &HashMap<u32, PaneId>,
+    claudes: &HashSet<u32>,
+) -> Option<PaneId> {
+    let mut current = pid;
+    for _ in 0..MAX_DEPTH {
+        current = *parents.get(&current)?;
+        if claudes.contains(&current) || current <= 1 || current == pid {
+            return None;
+        }
+        if let Some(pane) = panes.get(&current) {
+            return Some(*pane);
         }
     }
     None
@@ -125,6 +147,20 @@ not a process line
         assert_eq!(owner(77028, &parents, &panes), Some(1));
         assert_eq!(owner(76638, &parents, &panes), Some(2));
         assert_eq!(owner(31833, &parents, &panes), None);
+    }
+
+    #[test]
+    fn a_claude_started_by_the_panes_claude_is_not_the_panes() {
+        // Pane process 76623 is itself a Claude; 76638 (its grandchild) is a headless one it started.
+        let parents = table();
+        let panes = HashMap::from([(77017, 1), (76623, 2)]);
+        let claudes = HashSet::from([76623, 76638, 77028]);
+        assert_eq!(wrapped_claude_owner(76638, &parents, &panes, &claudes), None);
+        // 77017 is a wrapper (no session of its own): its Claude is still the pane's.
+        assert_eq!(wrapped_claude_owner(77028, &parents, &panes, &claudes), Some(1));
+        // Nested under a wrapped Claude: not the pane's either.
+        let parents = parse_ps("500 77028\n77028 77018\n77018 77017\n77017 1");
+        assert_eq!(wrapped_claude_owner(500, &parents, &panes, &HashSet::from([500, 77028])), None);
     }
 
     #[test]
