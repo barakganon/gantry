@@ -589,7 +589,7 @@ impl TerminalView {
         cx.notify();
     }
 
-    fn key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if input_fate(&self.state) == InputFate::Drop {
             if matches!(self.state, PaneState::Exited(_) | PaneState::Failed(_)) {
                 let keystroke = &event.keystroke;
@@ -628,6 +628,14 @@ impl TerminalView {
             && let Some(bytes) = self.delete_prompt_selection()
         {
             self.send_input(&bytes, cx);
+            cx.stop_propagation();
+            return;
+        }
+        if input.key == "enter"
+            && input.alt
+            && !(input.ctrl || input.shift || input.platform)
+            && self.open_spell_menu_at_cursor(window, cx)
+        {
             cx.stop_propagation();
             return;
         }
@@ -805,6 +813,33 @@ impl TerminalView {
     fn open_spell_menu(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let Some((col, row, _)) = self.logical_cell_at(position) else { return false };
         let word = self.misspelled_words().into_iter().find(|(at, cols)| *at == row && cols.contains(&(col as usize)));
+        self.show_prompt_menu(word, position, false, window, cx)
+    }
+
+    /// Option+Enter on a Claude prompt: the spelling menu of the misspelled word at the cursor (or just typed), its
+    /// first entry active for the arrow keys. False when there is none.
+    fn open_spell_menu_at_cursor(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some((row, col)) = self.term.prompt_cursor().filter(|_| self.launch.is_claude()) else { return false };
+        let text = self.term.row_text(row as u16);
+        let Some(cols) = spelling::misspelled(&text).into_iter().find(|cols| cols.contains(&col) || cols.end == col)
+        else {
+            return false;
+        };
+        let (w, h) = (self.metrics.width, self.metrics.height);
+        let position = self.grid_origin + Point::new(w * cols.start as f32, h * (row + 1) as f32);
+        self.show_prompt_menu(Some((row as u16, cols)), position, true, window, cx)
+    }
+
+    /// The prompt's menu at `position`: `word`'s spelling suggestions first, then the edit entries.
+    fn show_prompt_menu(
+        &mut self,
+        word: Option<(u16, Range<usize>)>,
+        position: Point<Pixels>,
+        keyboard: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let row = word.as_ref().map_or(0, |(row, _)| *row);
         let typing = input_fate(&self.state) != InputFate::Drop;
         let cut = typing && self.term.prompt_selection_edit().is_some();
         let rephrase = cut && self.launch.is_claude() && self.rephrase.is_none();
@@ -825,7 +860,8 @@ impl TerminalView {
         }
         let focus = cx.focus_handle();
         focus.focus(window, cx);
-        self.spell_menu = Some((OpenMenu::new(items, position, focus), row, cols));
+        let menu = OpenMenu::new(items, position, focus);
+        self.spell_menu = Some((if keyboard { menu.with_first_active() } else { menu }, row, cols));
         cx.notify();
         true
     }

@@ -37,13 +37,28 @@ pub(crate) struct OpenMenu {
     /// Where the open submenu was drawn: it hangs outside the menu's own bounds, so a press inside it must not
     /// count as a click outside the menu.
     sub_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// The entry `Up`/`Down` moved to, which `Enter` picks.
+    pub active: Rc<Cell<Option<usize>>>,
 }
 
 impl OpenMenu {
     /// A closed-submenu menu at `position`.
     pub fn new(items: Vec<MenuItem>, position: Point<Pixels>, focus: FocusHandle) -> OpenMenu {
         OPEN.fetch_add(1, Ordering::Relaxed);
-        OpenMenu { items, position, focus, sub: Rc::new(Cell::new(None)), sub_bounds: Rc::new(Cell::new(None)) }
+        OpenMenu {
+            items,
+            position,
+            focus,
+            sub: Rc::new(Cell::new(None)),
+            sub_bounds: Rc::new(Cell::new(None)),
+            active: Rc::new(Cell::new(None)),
+        }
+    }
+
+    /// The same, opened from the keyboard: its first entry is active.
+    pub fn with_first_active(self) -> OpenMenu {
+        self.active.set(self.items.iter().position(|item| matches!(item, MenuItem::Entry(_))));
+        self
     }
 }
 
@@ -77,8 +92,9 @@ fn shortcut_text(shortcut: Shortcut, settings: &Settings) -> String {
     shortcut_label(settings, action)
 }
 
-/// Draw `menu` floating above everything; a pick or a click outside calls back, `Esc` dismisses. A submenu opens beside
-/// its row on hover or `Right`, and closes on `Left` or `Esc`.
+/// Draw `menu` floating above everything; a pick or a click outside calls back, `Esc` dismisses. `Up`/`Down` move
+/// between entries and `Enter` picks one. A submenu opens beside its row on hover or `Right`, and closes on `Left` or
+/// `Esc`.
 pub(crate) fn render(
     id: &'static str,
     menu: &OpenMenu,
@@ -91,6 +107,7 @@ pub(crate) fn render(
     let on_dismiss = Rc::new(on_dismiss);
     let dismiss_key = on_dismiss.clone();
     let open_sub = menu.sub.get();
+    let active = menu.active.get();
     let entry_row = |row_id: (&'static str, usize), entry: &MenuEntry, closes_sub: Option<Rc<Cell<Option<usize>>>>| {
         let action = entry.action.clone();
         let on_pick = on_pick.clone();
@@ -104,6 +121,7 @@ pub(crate) fn render(
             .rounded(px(RADIUS_SMALL))
             .cursor_pointer()
             .hover(|style| style.bg(rgb(theme.tokens.line)))
+            .when(row_id.0 == "menu-item" && active == Some(row_id.1), |item| item.bg(rgb(theme.tokens.line)))
             .when(entry.accent, |item| item.text_color(rgb(theme.tokens.accent)).font_weight(FontWeight::SEMIBOLD))
             .child(div().flex_1().whitespace_nowrap().child(entry.label.clone()))
             .when(entry.checked, |item| item.child(div().flex_none().text_color(rgb(theme.tokens.accent)).child("✓")))
@@ -217,6 +235,16 @@ pub(crate) fn render(
     let sub = menu.sub.clone();
     let (sub_open, sub_bounds) = (menu.sub.clone(), menu.sub_bounds.clone());
     let first_submenu = menu.items.iter().position(|item| matches!(item, MenuItem::Submenu { .. }));
+    let entries: Vec<(usize, MenuAction)> = menu
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| match item {
+            MenuItem::Entry(entry) => Some((index, entry.action.clone())),
+            _ => None,
+        })
+        .collect();
+    let (moved, pick_key) = (menu.active.clone(), on_pick.clone());
     let card = div()
         .id(id)
         // A floating layer: clicks must not reach what is beneath it.
@@ -232,6 +260,22 @@ pub(crate) fn render(
                 "right" if sub.get().is_none() && first_submenu.is_some() => {
                     sub.set(first_submenu);
                     window.refresh();
+                }
+                key @ ("up" | "down") if !entries.is_empty() => {
+                    let at = moved.get().and_then(|active| entries.iter().position(|(index, _)| *index == active));
+                    let next = match (key, at) {
+                        ("down", Some(at)) => (at + 1) % entries.len(),
+                        ("up", Some(at)) => (at + entries.len() - 1) % entries.len(),
+                        ("down", None) => 0,
+                        _ => entries.len() - 1,
+                    };
+                    moved.set(Some(entries[next].0));
+                    window.refresh();
+                }
+                "enter" => {
+                    if let Some((_, action)) = entries.iter().find(|(index, _)| Some(*index) == moved.get()) {
+                        pick_key(action, window, cx);
+                    }
                 }
                 _ => {}
             }
