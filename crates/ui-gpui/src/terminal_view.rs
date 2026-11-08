@@ -14,7 +14,7 @@ use app_core::bidi::{RowOrder, logical_hit, to_display};
 use app_core::dialogs::{BarState, BarTone, PaneBar, pane_bar};
 use app_core::host_state::HostCard;
 use app_core::image_paste;
-use app_core::input::{KeyInput, ListItem, arrow_presses, edit_bytes, encode_key, list_item};
+use app_core::input::{KeyInput, ListItem, arrow_presses, edit_bytes, encode_key, list_item, row_presses};
 use app_core::layout::grid_dims;
 use app_core::menus::{self, MenuAction};
 use app_core::mouse::{self, MouseAction, MouseMods, encode_mouse};
@@ -1190,10 +1190,14 @@ impl TerminalView {
         let click = self.click_cell.take();
         if self.term.selection_text().is_none() {
             self.term.clear_selection();
-            if let Some((col, row)) = cell.filter(|cell| click == Some(*cell))
-                && let Some(steps) = self.term.cursor_moves_to(col, row)
-            {
-                self.send_input(&arrow_presses(steps, self.term.key_modes().app_cursor), cx);
+            if let Some((col, row)) = cell.filter(|cell| click == Some(*cell)) {
+                let app_cursor = self.term.key_modes().app_cursor;
+                if let Some(steps) = self.term.cursor_moves_to(col, row) {
+                    self.send_input(&arrow_presses(steps, app_cursor), cx);
+                } else if let Some((rows, steps)) = self.term.box_moves_to(col, row).filter(|_| self.launch.is_claude())
+                {
+                    self.send_input(&[row_presses(rows, app_cursor), arrow_presses(steps, app_cursor)].concat(), cx);
+                }
             }
         }
         cx.notify();

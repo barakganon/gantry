@@ -442,11 +442,32 @@ impl TermState {
 
     /// The rows of Claude's input box: between the `─` rules above and below the prompt cursor.
     pub fn input_box_text(&self) -> Option<String> {
+        Some(self.input_box_rows()?.map(|row| self.row_text(row as u16) + "\n").collect())
+    }
+
+    fn input_box_rows(&self) -> Option<std::ops::Range<usize>> {
         let (row, _) = self.prompt_cursor()?;
         let rule = |row: usize| self.row_text(row as u16).starts_with('─');
         let top = (0..row).rev().find(|&above| rule(above)).map_or(0, |above| above + 1);
         let bottom = (row..self.term.screen_lines()).find(|&below| rule(below)).unwrap_or(self.term.screen_lines());
-        Some((top..bottom).map(|row| self.row_text(row as u16) + "\n").collect())
+        Some(top..bottom)
+    }
+
+    /// Up/Down presses (negative up), then characters, that reach a cell on another row of Claude's input box. Each
+    /// row passed pulls the cursor back to its end when shorter, as Claude's editor does.
+    pub fn box_moves_to(&self, col: u16, row: u16) -> Option<(i32, i32)> {
+        const INDENT: usize = 2;
+        let cursor = self.prompt_cursor()?;
+        let row = row as usize;
+        if row == cursor.0 || !self.input_box_rows()?.contains(&row) {
+            return None;
+        }
+        let end = |row: usize| self.row_text(row as u16).chars().count().max(INDENT);
+        let passed: Vec<usize> =
+            if row < cursor.0 { (row..cursor.0).collect() } else { (cursor.0 + 1..=row).collect() };
+        let landed = passed.into_iter().fold(cursor.1, |col, row| col.min(end(row)));
+        let chars = self.steps((row, landed), (row, (col as usize).clamp(INDENT, end(row))))?;
+        Some((row as i32 - cursor.0 as i32, chars))
     }
 
     /// The prompt line's text up to the cursor.
@@ -691,6 +712,18 @@ mod tests {
         let mut t = TermState::new(10, 3);
         t.feed(b"ab\r\ncd");
         assert_eq!(t.cursor_moves_to(0, 0), None, "a previous line is not the prompt");
+    }
+
+    #[test]
+    fn a_click_on_another_row_of_the_input_box_moves_by_rows_then_characters() {
+        let mut t = TermState::new(20, 6);
+        t.feed(
+            b"\xe2\x94\x80\xe2\x94\x80\r\n> first line\r\n  ab\r\n  third one\r\n\xe2\x94\x80\xe2\x94\x80\x1b[4;12H",
+        );
+        assert_eq!(t.box_moves_to(6, 1), Some((-2, 2)), "through the short row, which pulls to its end");
+        assert_eq!(t.box_moves_to(0, 2), Some((-1, -2)), "the indent is the row's start");
+        assert_eq!(t.box_moves_to(5, 0), None, "the rule is not in the box");
+        assert_eq!(t.box_moves_to(5, 3), None, "the cursor's own row");
     }
 
     #[test]

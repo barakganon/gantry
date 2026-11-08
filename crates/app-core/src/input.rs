@@ -140,6 +140,11 @@ pub fn arrow_presses(count: i32, app_cursor: bool) -> Vec<u8> {
     cursor_key(if count > 0 { 'C' } else { 'D' }, 1, app_cursor).repeat(count.unsigned_abs() as usize)
 }
 
+/// Down arrows for a positive count, Up for a negative one.
+pub fn row_presses(count: i32, app_cursor: bool) -> Vec<u8> {
+    cursor_key(if count > 0 { 'B' } else { 'A' }, 1, app_cursor).repeat(count.unsigned_abs() as usize)
+}
+
 /// A newline after a list item on the prompt, as in Slack.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ListItem {
