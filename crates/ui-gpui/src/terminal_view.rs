@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::assets::ARROW_DOWN_ICON;
 use crate::context_menu::{self, OpenMenu};
+use crate::field;
 use crate::hover_card::{self, HoverCard};
 use crate::settings_store::SettingsStore;
 use crate::spelling;
@@ -29,6 +30,7 @@ use app_core::settings::expand_home;
 use app_core::shortcuts::{self, Group, Platform};
 use app_core::snapshot::{CellStyle, Rgb, ScreenSnapshot, row_spans};
 use app_core::term_state::{Reach, TermState};
+use app_core::text_field::TextField;
 use app_core::theme_colors::{deepen, mix, terminal_palette};
 use app_core::url::{link_at, path_at};
 use app_core::workspace::PaneLaunch;
@@ -47,9 +49,9 @@ use protocol::message::PaneId;
 
 #[allow(missing_docs)]
 mod terminal_actions {
-    gpui::actions!(terminal, [Copy, Cut, Paste, ZoomIn, ZoomOut, ZoomReset]);
+    gpui::actions!(terminal, [Copy, Cut, Paste, FindInPane, ZoomIn, ZoomOut, ZoomReset]);
 }
-use terminal_actions::{Copy, Cut, Paste, ZoomIn, ZoomOut, ZoomReset};
+use terminal_actions::{Copy, Cut, FindInPane, Paste, ZoomIn, ZoomOut, ZoomReset};
 
 /// The binding of a terminal action (`id` is its settings key) at `key`.
 pub(crate) fn terminal_binding(id: &str, key: &str) -> Option<KeyBinding> {
@@ -58,6 +60,7 @@ pub(crate) fn terminal_binding(id: &str, key: &str) -> Option<KeyBinding> {
         "copy" => KeyBinding::new(key, Copy, context),
         "cut" => KeyBinding::new(key, Cut, context),
         "paste" => KeyBinding::new(key, Paste, context),
+        "findInPane" => KeyBinding::new(key, FindInPane, context),
         "zoomIn" => KeyBinding::new(key, ZoomIn, context),
         "zoomOut" => KeyBinding::new(key, ZoomOut, context),
         "zoomReset" => KeyBinding::new(key, ZoomReset, context),
@@ -269,6 +272,8 @@ pub struct TerminalView {
     spell_cache: Vec<(String, Vec<Range<usize>>)>,
     /// The open right-click menu of the prompt line, and the misspelled word's row and columns it was opened on.
     spell_menu: Option<(OpenMenu, u16, Range<usize>)>,
+    /// The open find bar's query, and whether it last found nothing.
+    find: Option<(TextField, bool)>,
     /// A rewrite of the prompt selection Claude is working on.
     rephrase: Option<Task<()>>,
     /// The last spelling fix or rephrase on the prompt (original, replacement), for Cmd+Z until other input.
@@ -326,6 +331,7 @@ impl TerminalView {
             hovered_link: None,
             spell_cache: Vec::new(),
             spell_menu: None,
+            find: None,
             rephrase: None,
             replaced: None,
             long_paste: None,
@@ -590,6 +596,10 @@ impl TerminalView {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find.is_some() {
+            self.find_key(event, cx);
+            return;
+        }
         if input_fate(&self.state) == InputFate::Drop {
             if matches!(self.state, PaneState::Exited(_) | PaneState::Failed(_)) {
                 let keystroke = &event.keystroke;
@@ -1226,6 +1236,81 @@ impl TerminalView {
     }
 }
 
+impl TerminalView {
+    fn open_find(&mut self, _: &FindInPane, _window: &mut Window, cx: &mut Context<Self>) {
+        let mut field = TextField::default();
+        if let Some(text) = self.term.selection_text().filter(|text| !text.contains('\n')) {
+            field.insert(&text);
+        }
+        field.select_all();
+        self.find = Some((field, false));
+        cx.notify();
+    }
+
+    /// Keys while the find bar is open: Enter for the older match, Shift+Enter the newer, Esc closes, the rest edit.
+    fn find_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let keystroke = &event.keystroke;
+        let Some((field, _)) = self.find.as_mut() else { return };
+        let before = field.text().to_string();
+        match keystroke.key.as_str() {
+            "escape" => self.find = None,
+            "enter" => self.find_next(!keystroke.modifiers.shift, false, cx),
+            _ if event.prefer_character_input && keystroke.key_char.is_some() => return,
+            _ if !field::edit(field, keystroke, cx) => return,
+            _ if field.text() != before => self.find_next(true, true, cx),
+            _ => {}
+        }
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn find_next(&mut self, older: bool, fresh: bool, cx: &mut Context<Self>) {
+        let Some((field, missed)) = self.find.as_mut() else { return };
+        *missed = !field.text().is_empty() && !self.term.find(field.text(), older, fresh);
+        if field.text().is_empty() {
+            self.term.clear_selection();
+        }
+        self.scrollbar_scrolled(cx);
+        cx.notify();
+    }
+
+    fn render_find_bar(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let (field, missed) = self.find.as_ref()?;
+        let press = field::on_press(cx, |this, offset, clicks, _, cx| {
+            if let Some((field, _)) = this.find.as_mut() {
+                field.press(offset, clicks);
+                cx.notify();
+            }
+        });
+        Some(
+            div()
+                .absolute()
+                .top(px(6.))
+                .right(px(18.))
+                .w(theme.ui(260.))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.ui(8.))
+                .px(theme.ui(8.))
+                .py(theme.ui(4.))
+                .rounded(theme.ui(6.))
+                .border_1()
+                .border_color(rgb(if *missed { theme.tokens.danger } else { theme.tokens.line }))
+                .bg(rgb(theme.tokens.raised))
+                .text_size(theme.ui(12.))
+                .text_color(rgb(theme.tokens.text))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(div().flex_1().min_w_0().child(field::render(field, "Find in pane", true, theme, press)))
+                .child(div().flex_none().text_color(rgb(theme.tokens.muted)).child(if *missed {
+                    "No match"
+                } else {
+                    "↩ ⇧↩ esc"
+                })),
+        )
+    }
+}
+
 impl EntityInputHandler for TerminalView {
     fn text_for_range(
         &mut self,
@@ -1259,6 +1344,11 @@ impl EntityInputHandler for TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some((field, _)) = self.find.as_mut() {
+            field.insert(text);
+            self.find_next(true, true, cx);
+            return;
+        }
         if input_fate(&self.state) == InputFate::Drop {
             return;
         }
@@ -1340,6 +1430,7 @@ impl Render for TerminalView {
                 }
             }
         }
+        let find_bar = self.render_find_bar(&theme, cx);
         let spell_menu = self.spell_menu.as_ref().map(|(menu, _, _)| {
             let pick = cx.listener(|this, action: &MenuAction, window, cx| this.spell_pick(action, window, cx));
             let dismiss = cx.listener(|this, _: &(), window, cx| {
@@ -1402,6 +1493,7 @@ impl Render for TerminalView {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::open_find))
             .when(self.paths_are_local(), |el| {
                 el.on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| this.paste_paths(paths, cx)))
             })
@@ -1668,6 +1760,7 @@ impl Render for TerminalView {
                     ),
                 )
             })
+            .children(find_bar)
             .children(spell_menu)
     }
 }

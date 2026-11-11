@@ -90,6 +90,7 @@ pub const ACTIONS: &[Action] = &[
     action("copy", Group::Terminal, "Copy", "ctrl-shift-c", "cmd-c"),
     action("cut", Group::Terminal, "Cut", "ctrl-shift-x", "cmd-x"),
     action("paste", Group::Terminal, "Paste", "ctrl-shift-v", "cmd-v"),
+    action("findInPane", Group::Terminal, "Find in this pane", "ctrl-shift-alt-f", "cmd-shift-f"),
     action("zoomIn", Group::Terminal, "Zoom in", "ctrl-=", "cmd-="),
     action("zoomOut", Group::Terminal, "Zoom out", "ctrl--", "cmd--"),
     action("zoomReset", Group::Terminal, "Reset zoom", "ctrl-0", "cmd-0"),
@@ -418,6 +419,7 @@ mod tests {
             ("copy", "ctrl-shift-c"),
             ("cut", "ctrl-shift-x"),
             ("paste", "ctrl-shift-v"),
+            ("findInPane", "ctrl-shift-alt-f"),
             ("zoomIn", "ctrl-="),
             ("zoomOut", "ctrl--"),
             ("zoomReset", "ctrl-0"),
@@ -425,7 +427,7 @@ mod tests {
         for (id, key) in expected {
             assert_eq!(ks(&linux, id).first().map(String::as_str), Some(key), "{id}");
         }
-        assert_eq!(linux.len(), expected.len() + 1, "27 single bindings, the zoom alias");
+        assert_eq!(linux.len(), expected.len() + 1, "28 single bindings, the zoom alias");
         let mac = bindings(&none(), Platform::MacOs);
         assert_eq!(ks(&mac, "nextTab"), ["cmd-shift-]", "ctrl-tab"]);
         assert_eq!(ks(&mac, "previousTab"), ["cmd-shift-[", "ctrl-shift-tab"]);

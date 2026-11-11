@@ -361,6 +361,27 @@ impl TermState {
         true
     }
 
+    /// Select the next match of `query` (plain text, case-insensitive unless it has a capital) and scroll to it:
+    /// older (up) or newer than the current selection, or the newest one when `fresh`. False when none.
+    pub fn find(&mut self, query: &str, older: bool, fresh: bool) -> bool {
+        use alacritty_terminal::index::Direction;
+        use alacritty_terminal::term::search::RegexSearch;
+        let Ok(mut regex) = RegexSearch::new(&regex::escape(query)) else { return false };
+        let current = self.term.selection.as_ref().and_then(|selection| selection.to_range(&self.term));
+        let (origin, side) = match current.filter(|_| !fresh) {
+            Some(range) if older => (range.start.sub(&self.term, Boundary::None, 1), Side::Right),
+            Some(range) => (range.end.add(&self.term, Boundary::None, 1), Side::Left),
+            None => (self.last_cell(), Side::Right),
+        };
+        let direction = if older || fresh || current.is_none() { Direction::Left } else { Direction::Right };
+        let Some(found) = self.term.search_next(&mut regex, origin, direction, side, None) else { return false };
+        let mut selection = Selection::new(SelectionType::Simple, *found.start(), Side::Left);
+        selection.update(*found.end(), Side::Right);
+        self.term.selection = Some(selection);
+        self.term.scroll_to_point(*found.start());
+        true
+    }
+
     /// Extend the current selection to a viewport cell.
     pub fn update_selection(&mut self, col: u16, row: u16, right_half: bool) {
         let point = self.viewport_point(col, row);
@@ -712,6 +733,19 @@ mod tests {
         let mut t = TermState::new(10, 3);
         t.feed(b"ab\r\ncd");
         assert_eq!(t.cursor_moves_to(0, 0), None, "a previous line is not the prompt");
+    }
+
+    #[test]
+    fn find_walks_matches_from_the_newest_up_and_back_down() {
+        let mut t = TermState::new(20, 4);
+        t.feed(b"one Foo\r\ntwo foo\r\nthree");
+        assert!(t.find("foo", true, true));
+        assert_eq!(t.selection_text().as_deref(), Some("foo"), "the newest first");
+        assert!(t.find("foo", true, false));
+        assert_eq!(t.selection_text().as_deref(), Some("Foo"), "then the older one, any case");
+        assert!(t.find("foo", false, false));
+        assert_eq!(t.selection_text().as_deref(), Some("foo"));
+        assert!(!t.find("Bar", true, true));
     }
 
     #[test]
