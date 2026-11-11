@@ -8,6 +8,26 @@ pub fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
     if bracketed { [b"\x1b[200~".as_slice(), cleaned.as_bytes(), b"\x1b[201~"].concat() } else { cleaned.into_bytes() }
 }
 
+/// Whether the newest `[Pasted text #N +L lines]` in Claude's input box stands for `text`: its line count matches and
+/// the text is short enough (100,000 UTF-16 units) for Claude to expand it in place when it is pasted again.
+pub fn newest_paste_token_is(box_text: &str, text: &str) -> bool {
+    let newest = box_text
+        .match_indices("[Pasted text #")
+        .filter_map(|(at, marker)| {
+            let rest = &box_text[at + marker.len()..];
+            let (id, rest) = rest.split_at(rest.find(|c: char| !c.is_ascii_digit())?);
+            let lines = match rest.strip_prefix(" +") {
+                Some(rest) => rest.split_once(" lines]")?.0.parse().ok()?,
+                None if rest.starts_with(']') => 0,
+                None => return None,
+            };
+            Some((id.parse::<u64>().ok()?, lines))
+        })
+        .max();
+    newest.is_some_and(|(_, lines): (u64, usize)| lines == text.matches('\n').count())
+        && text.encode_utf16().count() <= 100_000
+}
+
 /// Paths as shell words, space-separated with a trailing space, as Terminal.app pastes dropped files: anything outside a
 /// safe set gets a backslash, so both a shell and Claude's prompt read each path back whole.
 pub fn quote_paths<'a>(paths: impl IntoIterator<Item = &'a str>) -> String {
@@ -55,5 +75,15 @@ mod tests {
         assert_eq!(quote_paths(["/x/it's;$y"]), "/x/it\\'s\\;\\$y ");
         assert_eq!(quote_paths(["/דוח/צילום.pdf"]), "/דוח/צילום.pdf ");
         assert_eq!(quote_paths([]), "");
+    }
+
+    #[test]
+    fn only_the_newest_token_with_the_same_line_count_stands_for_the_text() {
+        let three = "a\nb\nc\nd";
+        assert!(newest_paste_token_is("> x [Pasted text #2 +3 lines]\n", three));
+        assert!(!newest_paste_token_is("> [Pasted text #2 +3 lines] [Pasted text #3 +9 lines]", three), "a newer one");
+        assert!(!newest_paste_token_is("> no token here", three));
+        assert!(newest_paste_token_is("> [Pasted text #1]", &"x".repeat(900)));
+        assert!(!newest_paste_token_is("> [Pasted text #1]", &"x".repeat(100_001)), "too long to expand");
     }
 }

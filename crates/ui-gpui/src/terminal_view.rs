@@ -734,15 +734,30 @@ impl TerminalView {
     }
 
     /// Claude collapses a long paste into `[Pasted text #1 +40 lines]` and expands it when the same text is pasted
-    /// again right away, so long text goes in twice.
+    /// again, so long text goes in twice: the second time once the token shows, or Claude adds another one.
     fn paste_expanded(&mut self, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else { return };
         let mut bytes = self.delete_prompt_selection().unwrap_or_default();
         bytes.extend(encode_paste(&text, self.term.bracketed_paste()));
-        if self.note_long_paste(&text) && text.encode_utf16().count() <= 100_000 {
-            bytes.extend(encode_paste(&text, true));
-        }
+        let collapses = self.note_long_paste(&text);
         self.send_input(&bytes, cx);
+        if !collapses {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            for _ in 0..40 {
+                cx.background_executor().timer(Duration::from_millis(50)).await;
+                let Ok(done) =
+                    this.update(cx, |this, cx| this.paste_collapsed() == Some(true) && this.toggle_paste(cx))
+                else {
+                    return;
+                };
+                if done {
+                    return;
+                }
+            }
+        })
+        .detach();
     }
 
     /// Remember `text` when Claude collapses it into `[Pasted text]`; whether it does.
@@ -760,7 +775,7 @@ impl TerminalView {
     /// Whether the last long paste shows collapsed on the prompt (`Some(true)`), or in full just before the cursor.
     fn paste_collapsed(&self) -> Option<bool> {
         let text = self.long_paste.as_ref()?;
-        if self.term.input_box_text()?.contains("[Pasted text #") {
+        if app_core::paste::newest_paste_token_is(&self.term.input_box_text()?, text) {
             return Some(true);
         }
         let last_line = text.lines().last()?.trim();
