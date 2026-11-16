@@ -16,7 +16,7 @@ use app_core::dialogs::{BarState, BarTone, PaneBar, pane_bar};
 use app_core::host_state::HostCard;
 use app_core::image_paste;
 use app_core::input::{
-    KeyInput, ListItem, arrow_presses, edit_bytes, encode_key, list_item, row_presses, wrap_selection,
+    KeyInput, ListItem, arrow_presses, closing_pair, edit_bytes, encode_key, list_item, row_presses, wrap_selection,
 };
 use app_core::layout::{PaneSize, grid_dims};
 use app_core::menus::{self, MenuAction};
@@ -583,8 +583,25 @@ impl TerminalView {
 
     /// Typing an opening quote or bracket over a selection on the prompt wraps it in the pair.
     fn wrap_prompt_selection(&mut self, typed: &str) -> Option<Vec<u8>> {
-        let (moves, length) = self.term.prompt_selection_edit()?;
-        let bytes = wrap_selection(typed, moves, length, self.term.key_modes().app_cursor)?;
+        let app_cursor = self.term.key_modes().app_cursor;
+        let bytes = match self.term.prompt_selection_edit() {
+            Some((moves, length)) => wrap_selection(typed, moves, length, app_cursor)?,
+            // Over several rows of Claude's input box: the closing half first, so the start stays put.
+            None if self.launch.is_claude() => {
+                let close = closing_pair(typed)?;
+                let ((rows, chars), (back_rows, back_chars)) = self.term.box_selection_moves()?;
+                [
+                    row_presses(rows, app_cursor),
+                    arrow_presses(chars, app_cursor),
+                    close.into(),
+                    row_presses(back_rows, app_cursor),
+                    arrow_presses(back_chars, app_cursor),
+                    typed.into(),
+                ]
+                .concat()
+            }
+            None => return None,
+        };
         self.term.clear_selection();
         Some(bytes)
     }

@@ -152,18 +152,23 @@ pub fn arrow_presses(count: i32, app_cursor: bool) -> Vec<u8> {
 /// the cursor to the selection's start (`moves` reach its end, `length` characters long), the opening half, to the
 /// end, the closing half.
 pub fn wrap_selection(typed: &str, moves: i32, length: usize, app_cursor: bool) -> Option<Vec<u8>> {
-    let close = match typed {
-        "\"" | "'" | "`" => typed,
-        "(" => ")",
-        "[" => "]",
-        "{" => "}",
-        _ => return None,
-    };
+    let close = closing_pair(typed)?;
     let length = length as i32;
     Some(
         [arrow_presses(moves - length, app_cursor), typed.into(), arrow_presses(length, app_cursor), close.into()]
             .concat(),
     )
+}
+
+/// The closing half of a pair `typed` opens: a quote closes itself, a bracket its match.
+pub fn closing_pair(typed: &str) -> Option<&str> {
+    Some(match typed {
+        "\"" | "'" | "`" => typed,
+        "(" => ")",
+        "[" => "]",
+        "{" => "}",
+        _ => return None,
+    })
 }
 
 /// Down arrows for a positive count, Up for a negative one.

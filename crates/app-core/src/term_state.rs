@@ -474,21 +474,45 @@ impl TermState {
         Some(top..bottom)
     }
 
-    /// Up/Down presses (negative up), then characters, that reach a cell on another row of Claude's input box. Each
-    /// row passed pulls the cursor back to its end when shorter, as Claude's editor does.
+    /// Up/Down presses (negative up), then characters, that reach a cell on another row of Claude's input box.
     pub fn box_moves_to(&self, col: u16, row: u16) -> Option<(i32, i32)> {
-        const INDENT: usize = 2;
         let cursor = self.prompt_cursor()?;
-        let row = row as usize;
-        if row == cursor.0 || !self.input_box_rows()?.contains(&row) {
+        let (rows, chars, _) =
+            self.box_path(cursor, (row as usize, col as usize), (0, 0)).filter(|_| row as usize != cursor.0)?;
+        Some((rows, chars))
+    }
+
+    /// A selection over several rows of Claude's input box, to wrap: the moves (rows, then characters) from the cursor
+    /// to just past its end, then, once one character is typed there, on to its start.
+    pub fn box_selection_moves(&self) -> Option<((i32, i32), (i32, i32))> {
+        let cursor = self.prompt_cursor()?;
+        let range = self.term.selection.as_ref()?.to_range(&self.term)?;
+        if range.start.line.0 < 0 || range.start.line == range.end.line {
             return None;
         }
-        let end = |row: usize| self.row_text(row as u16).chars().count().max(INDENT);
-        let passed: Vec<usize> =
-            if row < cursor.0 { (row..cursor.0).collect() } else { (cursor.0 + 1..=row).collect() };
-        let landed = passed.into_iter().fold(cursor.1, |col, row| col.min(end(row)));
-        let chars = self.steps((row, landed), (row, (col as usize).clamp(INDENT, end(row))))?;
-        Some((row as i32 - cursor.0 as i32, chars))
+        let (start, end) =
+            ((range.start.line.0 as usize, range.start.column.0), (range.end.line.0 as usize, range.end.column.0 + 1));
+        let (rows, chars, col) = self.box_path(cursor, end, (0, 0))?;
+        let (back_rows, back_chars, _) = self.box_path((end.0, col + 1), start, (end.0, 1))?;
+        Some(((rows, chars), (back_rows, back_chars)))
+    }
+
+    /// Rows, then characters, from cell `from` to cell `to` (`(row, col)`) in Claude's input box, and the column it
+    /// lands on. Each row passed pulls the cursor back to its end when shorter, as Claude's editor does; `grown` adds
+    /// characters to one row's end.
+    fn box_path(&self, from: (usize, usize), to: (usize, usize), grown: (usize, usize)) -> Option<(i32, i32, usize)> {
+        const INDENT: usize = 2;
+        let rows = self.input_box_rows()?;
+        if !rows.contains(&from.0) || !rows.contains(&to.0) {
+            return None;
+        }
+        let end = |row: usize| {
+            self.row_text(row as u16).chars().count().max(INDENT) + if row == grown.0 { grown.1 } else { 0 }
+        };
+        let passed: Vec<usize> = if to.0 < from.0 { (to.0..from.0).collect() } else { (from.0 + 1..=to.0).collect() };
+        let landed = passed.into_iter().fold(from.1, |col, row| col.min(end(row)));
+        let col = to.1.clamp(INDENT, end(to.0));
+        Some((to.0 as i32 - from.0 as i32, col as i32 - landed as i32, col))
     }
 
     /// The prompt line's text up to the cursor.
@@ -758,6 +782,20 @@ mod tests {
         assert_eq!(t.box_moves_to(0, 2), Some((-1, -2)), "the indent is the row's start");
         assert_eq!(t.box_moves_to(5, 0), None, "the rule is not in the box");
         assert_eq!(t.box_moves_to(5, 3), None, "the cursor's own row");
+    }
+
+    #[test]
+    fn a_selection_over_rows_of_the_input_box_wraps_end_first() {
+        let mut t = TermState::new(20, 6);
+        t.feed(
+            b"\xe2\x94\x80\xe2\x94\x80\r\n> first line\r\n  ab\r\n  third one\r\n\xe2\x94\x80\xe2\x94\x80\x1b[4;12H",
+        );
+        t.start_selection(8, 1, false);
+        t.update_selection(3, 2, true);
+        assert_eq!(t.box_selection_moves(), Some(((-1, 0), (-1, 3))), "\"line\nab\": after b, then before l");
+        t.start_selection(3, 2, false);
+        t.update_selection(3, 2, true);
+        assert_eq!(t.box_selection_moves(), None, "one row is the prompt line's case");
     }
 
     #[test]
