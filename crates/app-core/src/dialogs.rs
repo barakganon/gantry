@@ -229,6 +229,24 @@ pub fn close_panes(count: usize, running: usize) -> DialogSpec {
     )
 }
 
+/// Delete a Gantry project that has `running` sessions: they are stopped and their panes closed.
+pub fn delete_project(name: &str, running: usize) -> DialogSpec {
+    spec(
+        format!("Delete project {name}?"),
+        Some(format!(
+            "{running} {} running in it. {} will be stopped and closed. You can resume Claude conversations later from Recent sessions.",
+            if running == 1 { "session is" } else { "sessions are" },
+            if running == 1 { "It" } else { "They" }
+        )),
+        Layout::Pills,
+        vec![
+            choice("Stop and delete", None, ChoiceStyle::Danger, false),
+            choice("Cancel", None, ChoiceStyle::Primary, true),
+        ],
+        1,
+    )
+}
+
 /// Take over a session running outside Gantry (on `host` when it is remote).
 pub fn take_over(host: Option<&str>) -> DialogSpec {
     let title = match host {
@@ -519,6 +537,22 @@ mod tests {
         assert!(c.detail.as_deref().is_some_and(|detail| detail.starts_with("Closing stops 1 running session;")));
         assert_eq!(labels(&c), ["Close all", "Hide all", "Keep open"]);
         assert_eq!((focus(&c), c.escape), (2, 2));
+    }
+
+    #[test]
+    fn delete_dialog_copy_mentions_the_count() {
+        let one = delete_project("Billing", 1);
+        assert_eq!(one.title, "Delete project Billing?");
+        assert!(one.detail.as_deref().unwrap().starts_with("1 session is running in it. It will be stopped"));
+        assert!(
+            delete_project("Billing", 3)
+                .detail
+                .as_deref()
+                .unwrap()
+                .starts_with("3 sessions are running in it. They will be stopped")
+        );
+        assert_eq!(labels(&one), ["Stop and delete", "Cancel"]);
+        assert_eq!(one.escape, 1);
     }
 
     #[test]

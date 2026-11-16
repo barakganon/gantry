@@ -103,6 +103,7 @@ impl WorkspaceView {
             }
         }
         self.host_states.remove(from);
+        self.hosts_with_rows.remove(from);
         if let Some(waiting) = self.queued.remove(from) {
             self.queued.entry(to.clone()).or_default().extend(waiting);
         }
@@ -136,7 +137,6 @@ impl WorkspaceView {
         self.workspace.remove_host(host);
         for leaf in leaves {
             self.slots.remove(&leaf);
-            self.marked_unread.remove(&leaf);
             self.unseen.remove(&leaf);
             self.pending.retain(|_, waiting| *waiting != leaf);
         }
@@ -144,6 +144,7 @@ impl WorkspaceView {
         self.killed_offline.retain(|killed| killed.0 != *host);
         self.pending_opens.retain(|_, open| open.host != *host);
         self.host_states.remove(host);
+        self.hosts_with_rows.remove(host);
         self.sidebar.update(cx, |sidebar, cx| sidebar.set_sessions(host, Vec::new(), cx));
         self.welcome_items.take();
         self.attention.reset(host, &[]);
@@ -207,6 +208,11 @@ impl WorkspaceView {
 
     /// Record `host`'s state and show it on the host's panes.
     fn set_host_state(&mut self, host: &HostId, state: HostState, cx: &mut Context<Self>) {
+        if state.shows_rows(self.hosts_with_rows.contains(host)) {
+            self.hosts_with_rows.insert(host.clone());
+        } else {
+            self.hosts_with_rows.remove(host);
+        }
         self.host_states.insert(host.clone(), state);
         if self.host_state(host) != HostState::Connected
             && matches!(&self.dialog, Some(open) if matches!(&open.action, DialogAction::Disconnect(asked) if asked == host))
@@ -217,6 +223,18 @@ impl WorkspaceView {
                 cx.spawn(async move |this, cx| {
                     let _ = window.update(cx, |_, window, cx| {
                         let _ = this.update(cx, |view, cx| view.focus_current(window, cx));
+                    });
+                })
+                .detach();
+            }
+        }
+        if self.is_away(host) && !self.host_state(host).asks_user() {
+            // Its tabs left the sidebar, so the one on screen goes too; checked once the state settled, since a
+            // reconnect may follow at once (a rename, Settings' Reconnect).
+            if let Some(window) = cx.windows().into_iter().next() {
+                cx.spawn(async move |this, cx| {
+                    let _ = window.update(cx, |_, window, cx| {
+                        let _ = this.update(cx, |view, cx| view.leave_off_screen_tab(window, cx));
                     });
                 })
                 .detach();
@@ -542,22 +560,52 @@ impl WorkspaceView {
         }
     }
 
-    /// Whether `host` is a listed SSH host that is not connected (nor on its way): the sidebar shows nothing of it, its
-    /// panes and sessions come back when it connects. A host that is not listed keeps its rows, so they can be closed.
+    /// Whether `host` is a listed SSH host the sidebar shows nothing of: it has not connected yet, or was disconnected
+    /// or found unusable since (`HostState::shows_rows`). Its panes and sessions come back when it connects. A host that is not listed keeps its rows, so they can be closed.
     pub(super) fn is_away(&self, host: &HostId) -> bool {
-        self.ssh_hosts.iter().any(|entry| entry.name == host.name()) && !self.host_state(host).in_connected_list()
+        self.ssh_hosts.iter().any(|entry| entry.name == host.name()) && !self.hosts_with_rows.contains(host)
+    }
+
+    /// The leaves of hosts that are away: the sidebar does not list them.
+    pub(super) fn unlisted_leaves(&self) -> HashSet<NodeId> {
+        self.workspace.leaves.iter().filter(|(_, leaf)| self.is_away(&leaf.host)).map(|(id, _)| *id).collect()
     }
 
     /// The leaves the sidebar does not show: those of hosts that are away and those under a collapsed project. Their
     /// tabs are passed by when switching tabs.
     pub(super) fn away_leaves(&self, cx: &App) -> HashSet<NodeId> {
-        let collapsed = self.sidebar.read(cx).collapsed_leaves();
-        self.workspace
-            .leaves
-            .iter()
-            .filter(|(id, leaf)| self.is_away(&leaf.host) || collapsed.contains(id))
-            .map(|(id, _)| *id)
-            .collect()
+        let mut away = self.unlisted_leaves();
+        away.extend(self.sidebar.read(cx).collapsed_leaves());
+        away
+    }
+
+    /// The leaves never on screen: those of hosts that are away, except a host waiting for the user (`asks_user`),
+    /// whose visible tab keeps its card.
+    fn off_screen_leaves(&self) -> HashSet<NodeId> {
+        let mut leaves = self.unlisted_leaves();
+        leaves.retain(|leaf| !self.host_state(&self.workspace.leaves[leaf].host).asks_user());
+        leaves
+    }
+
+    /// Whether the visible tab is never on screen (`off_screen_leaves`): the welcome screen shows in its place.
+    pub(super) fn active_tab_off_screen(&self) -> bool {
+        let off = self.off_screen_leaves();
+        self.workspace.active_hidden(|leaf| off.contains(&leaf))
+    }
+
+    /// When the visible tab is never on screen (`off_screen_leaves`), show the last tab visited that is, else the
+    /// first in the sidebar, else the welcome screen.
+    pub(super) fn leave_off_screen_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let off = self.off_screen_leaves();
+        let order = self.sidebar.read(cx).leaf_order();
+        let before = self.workspace.active;
+        if !self.workspace.leave_hidden_tab(&order, |leaf| off.contains(&leaf)) {
+            // The welcome screen: the hidden pane keeps no keyboard focus.
+            self.focus_handle.focus(window, cx);
+        } else if self.workspace.active != before {
+            self.focus_current(window, cx);
+            self.save(cx);
+        }
     }
 
     /// The × of `host` in the sidebar's Connected block: cancels a connection that is not up, stops an idle host's

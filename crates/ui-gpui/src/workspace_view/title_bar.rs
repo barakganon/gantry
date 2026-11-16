@@ -1,7 +1,8 @@
 use super::{OpenSettings, SIDEBAR_EDGE, WorkspaceView};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use app_core::release::{self, CheckStatus, Inline, NotesBlock, Online, Release};
+use app_core::sidebar_compact;
 use app_core::version::{self, Update, Version};
 use daemon::paths::{Paths, current_profile};
 use gpui::{
@@ -50,20 +51,28 @@ impl WorkspaceView {
         release::online(Version::parse(protocol::build::VERSION)?, self.installed, &self.releases)
     }
 
-    /// The first check 30 seconds after start, then one a day.
+    /// The first check 30 seconds after start, then a tick every few minutes that checks when one is due.
     pub(super) fn start_release_timer(&self, cx: &mut Context<Self>) -> Task<()> {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(release_check::FIRST_DELAY).await;
             loop {
-                if this.update(cx, |view, cx| view.check_releases(false, cx)).is_err() {
+                if this.update(cx, |view, cx| view.release_tick(cx)).is_err() {
                     return;
                 }
-                cx.background_executor().timer(release_check::INTERVAL).await;
+                cx.background_executor().timer(release_check::TICK).await;
             }
         })
     }
 
-    /// Asks GitHub for the release list. The daily check does nothing while the setting is off; Check now (`manual`)
+    /// Checks when the last good check is `release::CHECK_EVERY` old or there is none; a failed one is tried again on
+    /// the next tick, so a laptop that wakes without a network checks once it has one.
+    fn release_tick(&mut self, cx: &mut Context<Self>) {
+        if release::due(self.last_release_check, SystemTime::now()) {
+            self.check_releases(false, cx);
+        }
+    }
+
+    /// Asks GitHub for the release list. The scheduled check does nothing while the setting is off; Check now (`manual`)
     /// always asks, and ignores a press while one is running.
     pub(super) fn check_releases(&mut self, manual: bool, cx: &mut Context<Self>) {
         if !manual && !self.check_updates {
@@ -84,13 +93,16 @@ impl WorkspaceView {
         .detach();
     }
 
-    /// An answer arrived. The daily one is dropped when the check was turned off meanwhile; only a manual one reaches
+    /// An answer arrived. A scheduled one is dropped when the check was turned off meanwhile; only a manual one reaches
     /// the Check now row, and its find shows the notice even while the setting is off.
     fn release_fetched(&mut self, fetched: release_check::Fetched, manual: bool, cx: &mut Context<Self>) {
         if !manual && !self.check_updates {
             return;
         }
         let failed = fetched == release_check::Fetched::Failed;
+        if !failed {
+            self.last_release_check = Some(SystemTime::now());
+        }
         release_check::apply_result(&mut self.releases, &mut self.release_etag, fetched);
         if manual && let Some(running) = Version::parse(protocol::build::VERSION) {
             self.manual_found |= !failed;
@@ -162,23 +174,24 @@ impl WorkspaceView {
             .border_color(rgb(theme.tokens.line))
             .text_sm()
             .map(|bar| {
-                // The brand keeps the sidebar's width; the focused session starts where the panes do.
+                // The brand keeps the sidebar's width (so the logo alone shows when it is compact); the focused
+                // session starts where the panes do.
+                let amount = self.sidebar_amount();
+                let width = sidebar_compact::width(sidebar.width, amount);
                 let brand = div()
                     .id("brand")
                     .flex_none()
                     .h_full()
+                    .w(theme.ui(width) + px(SIDEBAR_EDGE))
+                    .pl(theme.ui(17.))
+                    .overflow_hidden()
                     .flex()
                     .items_center()
                     .gap(theme.ui(8.))
                     .font_weight(FontWeight::BOLD)
                     .child(img(LOGO).flex_none().size(theme.ui(22.)))
-                    .child("Gantry");
-                if sidebar.visible {
-                    let brand = brand.w(theme.ui(sidebar.width) + px(SIDEBAR_EDGE)).pl(theme.ui(18.));
-                    bar.child(if client_decorations { moves_window(brand) } else { brand })
-                } else {
-                    bar.pl_2().child(if client_decorations { moves_window(brand) } else { brand })
-                }
+                    .child(div().flex_none().whitespace_nowrap().opacity(1. - amount).child("Gantry"));
+                bar.child(if client_decorations { moves_window(brand) } else { brand })
             })
             .child(self.render_title_session(window, cx))
             .child(if client_decorations { moves_window(spacer) } else { spacer })
@@ -359,30 +372,9 @@ impl WorkspaceView {
     fn render_title_session(&self, window: &Window, cx: &mut Context<Self>) -> gpui::Div {
         let theme = theme(cx).clone();
         let middle = div().min_w_0().flex_shrink(1.).flex().flex_row().items_center().gap(theme.ui(8.));
-        let Some(tab) = self.workspace.active_tab() else { return middle };
+        let Some(tab) = self.workspace.active_tab().filter(|_| !self.active_tab_off_screen()) else { return middle };
         if tab.settings {
-            // With the sidebar hidden its row is gone, so the bar closes Settings.
-            return middle.font_weight(FontWeight::SEMIBOLD).child("Settings").when(
-                !self.workspace.sidebar.visible,
-                |middle| {
-                    middle.child(
-                        div()
-                            .id("close-settings")
-                            .flex_none()
-                            .size(theme.ui(20.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded_full()
-                            .text_xs()
-                            .font_weight(FontWeight::NORMAL)
-                            .hover(|style| style.bg(rgb(theme.tokens.raised)))
-                            .cursor_pointer()
-                            .child("×")
-                            .on_click(cx.listener(|this, _, window, cx| this.close_settings(window, cx))),
-                    )
-                },
-            );
+            return middle.font_weight(FontWeight::SEMIBOLD).child("Settings");
         }
         let index = self.workspace.active;
         let leaf = tab.focused;
@@ -416,8 +408,9 @@ impl WorkspaceView {
         let marker = self.workspace.leaf_color(leaf).map(|tint| tint.value(theme.preset));
         let sidebar = self.sidebar.read(cx);
         let host = self.workspace.leaves.get(&leaf).map(|leaf| leaf.host.clone()).unwrap_or_default();
+        let gantry = self.workspace.leaf_project(leaf).map(String::from);
         let project = cwd.as_deref().map(|cwd| {
-            let root = sidebar.project_of(&host, cwd);
+            let root = sidebar.project_of(&host, cwd, gantry.as_deref());
             let label = sidebar.project_label(&root).unwrap_or_else(|| {
                 root.file_name().map_or_else(String::new, |name| name.to_string_lossy().into_owned())
             });

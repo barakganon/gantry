@@ -175,41 +175,42 @@ pub struct ClaudeDir {
     pub color: Option<ProjectColor>,
 }
 
-/// Whether the sidebar is shown when Gantry starts.
+/// How the sidebar looks when Gantry starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SidebarAtStart {
     /// Use the saved layout's state.
     #[default]
     Remember,
-    /// Always shown.
-    Shown,
-    /// Always hidden.
-    Hidden,
+    /// Always the full sidebar.
+    Expanded,
+    /// Always the thin icon column.
+    Compact,
 }
 
 impl SidebarAtStart {
-    /// Whether the sidebar is visible at start, given whether the saved layout had it visible.
-    pub fn visible(self, saved: bool) -> bool {
+    /// Whether the sidebar starts compact, given whether the saved layout had it compact.
+    pub fn compact(self, saved: bool) -> bool {
         match self {
             SidebarAtStart::Remember => saved,
-            SidebarAtStart::Shown => true,
-            SidebarAtStart::Hidden => false,
+            SidebarAtStart::Expanded => false,
+            SidebarAtStart::Compact => true,
         }
     }
 
     fn name(self) -> &'static str {
         match self {
             SidebarAtStart::Remember => "remember",
-            SidebarAtStart::Shown => "shown",
-            SidebarAtStart::Hidden => "hidden",
+            SidebarAtStart::Expanded => "expanded",
+            SidebarAtStart::Compact => "compact",
         }
     }
 
+    /// The names of earlier versions, `shown` and `hidden`, still read.
     fn from_name(name: &str) -> Option<Self> {
         match name {
             "remember" => Some(SidebarAtStart::Remember),
-            "shown" => Some(SidebarAtStart::Shown),
-            "hidden" => Some(SidebarAtStart::Hidden),
+            "expanded" | "shown" => Some(SidebarAtStart::Expanded),
+            "compact" | "hidden" => Some(SidebarAtStart::Compact),
             _ => None,
         }
     }
@@ -222,15 +223,6 @@ pub struct ShellSettings {
     pub program: String,
     /// Arguments.
     pub args: Vec<String>,
-}
-
-/// Sizes of the recent sessions pop-up.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RecentsSettings {
-    /// Sessions listed per project (1 to 20).
-    pub per_project: usize,
-    /// Project chips (0 to 12).
-    pub chips: usize,
 }
 
 /// Window behaviour.
@@ -407,8 +399,6 @@ pub struct Settings {
     pub ssh_hosts: Vec<SshHost>,
     /// Shell for new shell panes.
     pub shell: ShellSettings,
-    /// Recent sessions pop-up sizes.
-    pub recents: RecentsSettings,
     /// Pinned folders, in order.
     pub favorites: Vec<PathBuf>,
     /// Window behaviour.
@@ -423,7 +413,7 @@ pub struct Settings {
     pub animate_working: bool,
     /// Whether splits slide in and menus, overlays and cards fade in.
     pub animate_ui: bool,
-    /// Whether Gantry asks GitHub once a day for a newer release.
+    /// Whether Gantry asks GitHub for a newer release (when it opens, then every few hours).
     pub check_for_updates: bool,
     /// The first-run wizard has been answered (imported or skipped), so it does not open by itself.
     pub setup_done: bool,
@@ -467,7 +457,7 @@ impl Default for Settings {
             alerts: AlertSettings {
                 needs_input: EventAlerts { badge: true, notification: true, sound: true, tone: AlertTone::FallingBlip },
                 finished: EventAlerts { badge: true, notification: true, sound: true, tone: AlertTone::ClassicBlip },
-                finished_after_seconds: 3,
+                finished_after_seconds: 1,
                 when_visible: false,
                 only_when_unfocused: false,
                 play_sounds: true,
@@ -481,7 +471,6 @@ impl Default for Settings {
             folder_claude_dirs: BTreeMap::new(),
             ssh_hosts: Vec::new(),
             shell: ShellSettings::default(),
-            recents: RecentsSettings { per_project: 5, chips: 6 },
             favorites: Vec::new(),
             window: WindowSettings {
                 restore_layout: true,
@@ -889,7 +878,7 @@ impl Reader {
         let alerts = AlertSettings {
             needs_input: self.event(&map, "needsInput", default.needs_input),
             finished: self.event(&map, "finished", default.finished),
-            finished_after_seconds: self.number(&map, "alerts.", "finishedAfterSeconds", 3.0, (0.0, 600.0)).round()
+            finished_after_seconds: self.number(&map, "alerts.", "finishedAfterSeconds", 1.0, (0.0, 600.0)).round()
                 as u32,
             when_visible: self.bool(&map, "alerts.", "whenVisible", default.when_visible),
             only_when_unfocused: self.bool(&map, "alerts.", "onlyWhenUnfocused", default.only_when_unfocused),
@@ -931,12 +920,6 @@ impl Reader {
         let shell = ShellSettings {
             program: self.string(&map, "shell.", "program"),
             args: self.strings(&map, "shell.", "args"),
-        };
-
-        let map = self.object(raw, "", "recents");
-        let recents = RecentsSettings {
-            per_project: self.number(&map, "recents.", "perProject", 5.0, (1.0, 20.0)).round() as usize,
-            chips: self.number(&map, "recents.", "chips", 6.0, (0.0, 12.0)).round() as usize,
         };
 
         let favorites = self.favorites(raw);
@@ -998,7 +981,6 @@ impl Reader {
             folder_claude_dirs,
             ssh_hosts,
             shell,
-            recents,
             favorites,
             window,
             last_prompt,
@@ -1118,12 +1100,6 @@ fn leaves(settings: &Settings) -> Vec<(Vec<&'static str>, Value, bool)> {
     add(&["folderClaudeDirs"], Value::Object(folders), !settings.folder_claude_dirs.is_empty());
     add(&["shell", "program"], settings.shell.program.clone().into(), settings.shell.program != default.shell.program);
     add(&["shell", "args"], settings.shell.args.clone().into(), settings.shell.args != default.shell.args);
-    add(
-        &["recents", "perProject"],
-        settings.recents.per_project.into(),
-        settings.recents.per_project != default.recents.per_project,
-    );
-    add(&["recents", "chips"], settings.recents.chips.into(), settings.recents.chips != default.recents.chips);
     let favorites: Vec<Value> =
         settings.favorites.iter().map(|path| path.to_string_lossy().into_owned().into()).collect();
     add(&["favorites"], Value::Array(favorites), !settings.favorites.is_empty());
@@ -1360,7 +1336,7 @@ mod tests {
             (14.0, 1.2, None)
         );
         assert_eq!(s.ui_font_size, 14.0);
-        assert_eq!(s.alerts.finished_after_seconds, 3);
+        assert_eq!(s.alerts.finished_after_seconds, 1);
         assert_eq!(s.alerts.volume, 0.4);
         assert_eq!(
             (s.alerts.needs_input.tone, s.alerts.finished.tone),
@@ -1495,12 +1471,11 @@ mod tests {
         settings.default_claude_dir = Some("Work".into());
         settings.folder_claude_dirs.insert("/home/me/work/ops".into(), "Work".into());
         settings.shell = ShellSettings { program: "/bin/zsh".into(), args: vec!["-l".into()] };
-        settings.recents = RecentsSettings { per_project: 9, chips: 2 };
         settings.favorites = vec!["/a".into(), "/b".into()];
         settings.window = WindowSettings {
             restore_layout: false,
             resume_sessions: false,
-            sidebar_at_start: SidebarAtStart::Hidden,
+            sidebar_at_start: SidebarAtStart::Compact,
             scrollback: 50000,
             right_to_left: false,
         };
@@ -1520,7 +1495,6 @@ mod tests {
         );
         assert_eq!(s.default_claude_dir, None);
         assert_eq!(s.shell, ShellSettings { program: String::new(), args: vec![] });
-        assert_eq!(s.recents, RecentsSettings { per_project: 5, chips: 6 });
         assert_eq!(
             s.window,
             WindowSettings {
@@ -1535,12 +1509,30 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_at_start_overrides_the_saved_state_only_when_asked() {
+    fn sidebar_at_start_compact_overrides_the_saved_state_only_when_asked() {
         for saved in [true, false] {
-            assert_eq!(SidebarAtStart::Remember.visible(saved), saved);
-            assert!(SidebarAtStart::Shown.visible(saved));
-            assert!(!SidebarAtStart::Hidden.visible(saved));
+            assert_eq!(SidebarAtStart::Remember.compact(saved), saved);
+            assert!(!SidebarAtStart::Expanded.compact(saved));
+            assert!(SidebarAtStart::Compact.compact(saved));
         }
+    }
+
+    #[test]
+    fn sidebar_at_start_reads_old_names() {
+        let read = |name: &str| {
+            parse(&format!(r#"{{"window": {{"sidebarAtStart": "{name}"}}}}"#)).settings.unwrap().window.sidebar_at_start
+        };
+        assert_eq!(read("shown"), SidebarAtStart::Expanded);
+        assert_eq!(read("hidden"), SidebarAtStart::Compact);
+        assert_eq!(read("expanded"), SidebarAtStart::Expanded);
+        assert_eq!(read("compact"), SidebarAtStart::Compact);
+    }
+
+    #[test]
+    fn sidebar_at_start_writes_new_names() {
+        assert_eq!(SidebarAtStart::Expanded.name(), "expanded");
+        assert_eq!(SidebarAtStart::Compact.name(), "compact");
+        assert_eq!(SidebarAtStart::Remember.name(), "remember");
     }
 
     #[test]
@@ -1700,16 +1692,27 @@ mod tests {
 
     #[test]
     fn ranges_clamp() {
-        let loaded = parse(
-            r#"{"recents": {"perProject": 99, "chips": -3}, "window": {"scrollback": 5, "sidebarAtStart": "sideways"}}"#,
-        );
+        let loaded = parse(r#"{"window": {"scrollback": 5, "sidebarAtStart": "sideways"}}"#);
         let settings = loaded.settings.unwrap();
-        assert_eq!(settings.recents, RecentsSettings { per_project: 20, chips: 0 });
         assert_eq!(settings.window.scrollback, 1000);
         assert_eq!(settings.window.sidebar_at_start, SidebarAtStart::Remember);
         let keys: Vec<_> = loaded.problems.iter().map(|problem| problem.key.as_str()).collect();
-        assert_eq!(keys, ["recents.perProject", "recents.chips", "window.sidebarAtStart", "window.scrollback"]);
+        assert_eq!(keys, ["window.sidebarAtStart", "window.scrollback"]);
         assert_eq!(parse(r#"{"window": {"scrollback": 1000000}}"#).settings.unwrap().window.scrollback, 100000);
+    }
+
+    #[test]
+    fn an_old_recents_key_is_left_alone() {
+        let loaded = parse(r#"{"recents": {"perProject": 99, "chips": -3}, "favorites": ["/a"]}"#);
+        assert!(loaded.problems.is_empty(), "{:?}", loaded.problems);
+        let mut settings = loaded.settings.unwrap();
+        settings.favorites.push("/b".into());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        save(&path, &settings, &loaded.raw).unwrap();
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["recents"], serde_json::json!({"perProject": 99, "chips": -3}), "kept as it was");
+        assert_eq!(written["favorites"], serde_json::json!(["/a", "/b"]));
     }
 
     #[test]
@@ -1757,6 +1760,25 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"/y\": \"teal\""), "{text}");
         assert!(text.contains("\"/z\": \"#a1b2c3\""), "{text}");
+    }
+
+    #[test]
+    fn a_gantry_project_key_is_a_valid_project_color_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let loaded = parse(r#"{"projectColors": {"folders": {"gantry://billing": "amber"}}}"#);
+        let mut s = loaded.settings.unwrap();
+        let key = Path::new("gantry://billing");
+        assert_eq!(project_color(&s, key), Some(Tint::Palette(ProjectColor::Amber)));
+        s.project_colors.folders.insert("gantry://docs".into(), Tint::Palette(ProjectColor::Teal));
+        save(&path, &s, &loaded.raw).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("\"gantry://billing\": \"amber\"") && text.contains("\"gantry://docs\": \"teal\""),
+            "{text}"
+        );
+        let back = parse(&text).settings.unwrap();
+        assert_eq!(back.project_colors.folders, s.project_colors.folders);
     }
 
     #[test]

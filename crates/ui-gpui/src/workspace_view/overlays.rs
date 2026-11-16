@@ -1,11 +1,13 @@
 use super::{DevContainerOpen, DialogAction, OpenDialog, OpenLauncher, OpenRecents, OpenSettings, WorkspaceView};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use app_core::dialogs::{Counts, DialogSpec};
 use app_core::host_state::HostState;
 use app_core::launcher::{self, OpenFolder, OpenPane, RecentFolder};
+use app_core::launcher_flow::LauncherHost;
 use app_core::menus::ColorTarget;
 use app_core::recents;
 use app_core::release::CheckStatus;
@@ -23,7 +25,7 @@ use app_core::session_tree::status_tone;
 use crate::askpass_view::{AskpassEvent, AskpassView};
 use crate::color_picker_view::{ColorPickerEvent, ColorPickerView};
 use crate::dialog_view::{DialogEvent, DialogView};
-use crate::launcher_view::{LauncherEvent, LauncherHost, LauncherView};
+use crate::launcher_view::{LauncherEvent, LauncherView};
 use crate::recents_view::{RecentsEvent, RecentsView, SEARCH_LIMIT};
 use crate::release_check::CheckRow;
 use crate::settings_store::SettingsStore;
@@ -31,6 +33,19 @@ use crate::settings_view::{SettingsEvent, SettingsView};
 use crate::setup_view::{Mode as SetupMode, SetupEvent, SetupView};
 use crate::ssh_wizard::WizardStart;
 use crate::theme::theme;
+
+/// This machine's host name, for the launcher's host step (empty when it cannot be read).
+fn machine_name() -> String {
+    let from_command = || {
+        let output = std::process::Command::new("hostname").output().ok()?;
+        String::from_utf8(output.stdout).ok()
+    };
+    let name = std::fs::read_to_string("/etc/hostname")
+        .ok()
+        .or_else(|| std::fs::read_to_string("/proc/sys/kernel/hostname").ok())
+        .or_else(from_command);
+    name.map(|name| name.trim().to_string()).unwrap_or_default()
+}
 
 impl WorkspaceView {
     /// Take over what the settings say that is not drawn by `render`: pane colors, the daemon's palette, and the
@@ -106,6 +121,14 @@ impl WorkspaceView {
         }
     }
 
+    /// Give an open launcher the open and recent folders as they are now.
+    pub(super) fn push_launcher_folders(&self, cx: &mut Context<Self>) {
+        if let Some((view, _)) = &self.launcher {
+            let (open, recent) = (self.open_folders(cx), self.recent_folders(cx));
+            view.update(cx, |view, cx| view.set_folders(open, recent, cx));
+        }
+    }
+
     pub(super) fn open_launcher(&mut self, _: &OpenLauncher, window: &mut Window, cx: &mut Context<Self>) {
         self.show_launcher(true, window, cx);
     }
@@ -139,10 +162,26 @@ impl WorkspaceView {
 
     /// This machine and the SSH hosts, with where each connection stands.
     fn launcher_hosts(&self) -> Vec<LauncherHost> {
-        let local = LauncherHost { id: HostId::local(), connected: true, state: HostState::Connected };
+        static LOCAL_NAME: OnceLock<String> = OnceLock::new();
+        let sessions = |host: &HostId| {
+            self.workspace.leaves.values().filter(|leaf| leaf.host == *host && leaf.pane.is_some()).count()
+        };
+        let local = LauncherHost {
+            id: HostId::local(),
+            connected: true,
+            state: HostState::Connected,
+            detail: LOCAL_NAME.get_or_init(machine_name).clone(),
+            sessions: sessions(&HostId::local()),
+        };
         let hosts = self.ssh_hosts.iter().map(|entry| {
             let id = HostId::named(&entry.name);
-            LauncherHost { connected: self.client(&id).is_some(), state: self.host_state(&id), id }
+            LauncherHost {
+                connected: self.client(&id).is_some(),
+                state: self.host_state(&id),
+                detail: entry.target.clone(),
+                sessions: sessions(&id),
+                id,
+            }
         });
         std::iter::once(local).chain(hosts).collect()
     }
@@ -156,19 +195,21 @@ impl WorkspaceView {
 
     /// Start a session in `dir` of `host` in a new tab: through the lazy connect on an SSH host, with the config dir
     /// pick on this machine.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn open_folder(
         &mut self,
         host: HostId,
         dir: PathBuf,
         claude: bool,
         dir_pick: Option<String>,
+        project: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if host.is_local() {
-            self.open_launcher_pick(claude, dir, dir_pick, cx);
+            self.open_launcher_pick(claude, dir, dir_pick, project, cx);
         } else {
-            self.open_on_host(&host, claude, dir, window, cx);
+            self.open_on_host(&host, claude, dir, project, window, cx);
         }
     }
 
@@ -255,18 +296,23 @@ impl WorkspaceView {
                 }
             }
             DialogAction::DevContainer(open) => {
-                let DevContainerOpen { claude, pick, cwd, axis, cwd_from, host, host_folder } = *open;
+                let DevContainerOpen { claude, pick, cwd, axis, cwd_from, host, project, host_folder } = *open;
                 match index {
                     0 => {
                         // Splits of a container pane start in the session's directory, not the docker client's.
                         let launch = self.new_launch(claude, cwd, pick.as_deref(), Some(host_folder), cx);
-                        self.open_launch(launch, axis, None, HostId::local(), window, cx)
+                        self.open_launch(launch, axis, None, HostId::local(), project, window, cx)
                     }
                     1 => {
                         let launch = self.new_launch(claude, cwd, pick.as_deref(), None, cx);
-                        self.open_launch(launch, axis, cwd_from, host, window, cx)
+                        self.open_launch(launch, axis, cwd_from, host, project, window, cx)
                     }
                     _ => {}
+                }
+            }
+            DialogAction::DeleteProject(name) => {
+                if index == 0 {
+                    self.remove_project(&name, window, cx);
                 }
             }
             DialogAction::Ack => {}
@@ -317,7 +363,11 @@ impl WorkspaceView {
     fn show_next_question(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(prompt) = self.askpass_queue.pop_front() else {
             self.askpass = None;
-            self.focus_current(window, cx);
+            match &self.launcher {
+                // A sign-in asked from the launcher's host step: the keys go back to the launcher.
+                Some((launcher, _)) => launcher.focus_handle(cx).focus(window, cx),
+                None => self.focus_current(window, cx),
+            }
             cx.notify();
             return;
         };
@@ -493,19 +543,25 @@ impl WorkspaceView {
     }
 
     fn on_launcher_event(&mut self, event: LauncherEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if let LauncherEvent::ListDir { host, request, path } = &event {
-            if let Some(client) = self.client(host) {
-                client.list_dir(*request, path);
+        match event {
+            LauncherEvent::ListDir { host, request, path } => {
+                if let Some(client) = self.client(&host) {
+                    client.list_dir(request, &path);
+                }
+                return;
             }
-            return;
+            LauncherEvent::HostAction { host } => {
+                self.run_host_action(&host, window, cx);
+                return;
+            }
+            _ => {}
         }
         self.launcher = None;
         match event {
-            LauncherEvent::Open { host, dir, claude, dir_pick } => {
-                self.open_folder(host, dir, claude, dir_pick, window, cx)
+            LauncherEvent::Open { host, dir, claude, dir_pick, project } => {
+                self.open_folder(host, dir, claude, dir_pick, project, window, cx)
             }
-            LauncherEvent::ListDir { .. } => {}
-            LauncherEvent::Browse { claude } => {
+            LauncherEvent::Browse { claude, project } => {
                 let picked = cx.prompt_for_paths(PathPromptOptions {
                     files: false,
                     directories: true,
@@ -518,13 +574,15 @@ impl WorkspaceView {
                         _ => None,
                     };
                     let _ = this.update_in(cx, |this, window, cx| match dir {
-                        Some(dir) => this.open_launcher_pick(claude, dir, None, cx),
+                        Some(dir) => this.open_launcher_pick(claude, dir, None, project, cx),
                         None => this.focus_current(window, cx),
                     });
                 })
                 .detach();
             }
+            LauncherEvent::Dismiss if self.ssh_wizard.is_some() => {}
             LauncherEvent::Dismiss => self.focus_current(window, cx),
+            LauncherEvent::ListDir { .. } | LauncherEvent::HostAction { .. } => {}
         }
         cx.notify();
     }

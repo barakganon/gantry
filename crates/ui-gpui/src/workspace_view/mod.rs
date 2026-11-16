@@ -3,7 +3,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use app_core::attention::{AlertKind, AttentionTracker};
 use app_core::host_state::HostState;
@@ -19,8 +19,8 @@ use daemon::askpass::AskPrompt;
 use daemon::client::{ClientEvent, Connection, DaemonClient, batch_events};
 use daemon::ssh::{AttemptHandle, Share};
 use gpui::{
-    Bounds, Context, Entity, FocusHandle, Pixels, Point, SharedString, Subscription, Task, UniformListScrollHandle,
-    Window, prelude::*,
+    Bounds, Context, Entity, FocusHandle, Pixels, Point, SharedString, Size, Subscription, Task,
+    UniformListScrollHandle, Window, prelude::*, px,
 };
 use notify::RecommendedWatcher;
 use protocol::host::{HostId, PaneKey};
@@ -114,6 +114,8 @@ pub(super) enum DialogAction {
     Disconnect(HostId),
     /// Close these leaves: 0 closes.
     ClosePanes(Vec<NodeId>),
+    /// Delete the Gantry project of this name: 0 stops its running sessions and closes its panes.
+    DeleteProject(String),
     /// Take over `session` on `host`: 0 asks the daemon to stop it and remembers where to resume.
     TakeOver { host: HostId, session: String, target: TakeOverTarget },
     /// The session ignored the stop request: 0 force quits it, any other choice gives up the take over.
@@ -132,6 +134,8 @@ pub(super) struct DevContainerOpen {
     axis: Option<Axis>,
     cwd_from: Option<PaneKey>,
     host: HostId,
+    /// The Gantry project the new session goes into.
+    project: Option<String>,
     /// The folder the container mounts, on the host.
     host_folder: PathBuf,
 }
@@ -211,6 +215,18 @@ struct PanelAnim {
     opening: bool,
 }
 
+/// The sidebar collapsing to its compact column or expanding again, from `started`.
+struct SidebarAnim {
+    started: Instant,
+    /// How compact it was when this began (0 = expanded, 1 = compact); a reversal starts where the last one was.
+    from: f32,
+    /// Where it ends.
+    to: f32,
+    /// The tab content's width once the animation is over. The panes are laid out at this width the whole time, in a
+    /// clipped box, so their terminals are resized once per toggle and not on every frame.
+    content_width: Pixels,
+}
+
 /// Now, in seconds since the Unix epoch.
 fn unix_now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
@@ -226,6 +242,8 @@ struct PendingOpen {
     cwd_from: Option<PaneKey>,
     /// The host a split runs on (the source pane's); `local` otherwise.
     host: HostId,
+    /// The Gantry project the new session goes into.
+    project: Option<String>,
 }
 
 /// One connected host's daemon.
@@ -306,6 +324,8 @@ pub struct WorkspaceView {
     ssh_hosts: Vec<SshHost>,
     /// Where each SSH host's connection stands (absent = `NotConnected`).
     host_states: HashMap<HostId, HostState>,
+    /// The SSH hosts whose panes the sidebar lists (`HostState::shows_rows`).
+    hosts_with_rows: HashSet<HostId>,
     /// New leaves waiting for their host to connect, to be spawned then.
     queued: HashMap<HostId, Vec<NodeId>>,
     /// The pending reconnect timer of each host.
@@ -352,8 +372,15 @@ pub struct WorkspaceView {
     sidebar: Entity<SidebarView>,
     /// Window bounds of the sidebar (for width drags).
     sidebar_bounds: Bounds<Pixels>,
+    /// The width of the row holding the sidebar and the panes, as of the last frame (0 before the first).
+    body_width: Pixels,
+    /// The window's size as of the last frame, to end the sidebar animation when it changes.
+    viewport: Size<Pixels>,
     /// The sidebar's edge is being dragged.
     resizing_sidebar: bool,
+    /// The pointer is over the sidebar or over its toggle tab: only then the tab is drawn.
+    sidebar_hovered: bool,
+    toggle_hovered: bool,
     _sidebar_events: Subscription,
     /// The open launcher overlay.
     launcher: Option<(Entity<LauncherView>, Subscription)>,
@@ -399,15 +426,17 @@ pub struct WorkspaceView {
     update_error: Option<String>,
     /// Whether `checkForUpdates` is on.
     check_updates: bool,
-    /// A manual check found releases while the daily check is off: the notice still shows.
+    /// A manual check found releases while the scheduled check is off: the notice still shows.
     manual_found: bool,
     /// The published releases the last good check found, newest first.
     releases: Vec<Release>,
     /// The `ETag` of that answer.
     release_etag: Option<String>,
+    /// When the last release check succeeded; the next one is due `release::CHECK_EVERY` later.
+    last_release_check: Option<SystemTime>,
     /// The open release notes card; its focus handle takes Esc.
     release_card: Option<FocusHandle>,
-    /// The daily check's timer.
+    /// The release check's timer.
     release_task: Option<Task<()>>,
     /// What is known about the git repos on screen.
     git: GitRepos,
@@ -415,6 +444,8 @@ pub struct WorkspaceView {
     git_panel_open: bool,
     /// The panel sliding in or out.
     panel_anim: Option<PanelAnim>,
+    /// The sidebar is collapsing or expanding.
+    sidebar_anim: Option<SidebarAnim>,
     /// The panel's width when open, in px (0 until the tab content has been measured).
     panel_full: f32,
     /// The panel's tab.
@@ -446,9 +477,6 @@ pub struct WorkspaceView {
     attention: AttentionTracker,
     /// Leaves with an alert the user has not seen yet.
     unseen: HashMap<NodeId, AlertKind>,
-    /// Leaves marked unread by hand: they keep the mark, even in view, until Claude's status changes or the user marks
-    /// them read.
-    marked_unread: HashSet<NodeId>,
     _activation: Subscription,
     /// The theme whose terminal colors the daemon was last told.
     sent_palette: Option<Preset>,
@@ -539,6 +567,8 @@ impl WorkspaceView {
         }
         let sidebar = cx.new(SidebarView::new);
         sidebar.update(cx, |sidebar, _| sidebar.set_hosts_collapsed(restored.workspace.sidebar.hosts_collapsed));
+        sidebar
+            .update(cx, |sidebar, cx| sidebar.set_amount(f32::from(u8::from(restored.workspace.sidebar.compact)), cx));
         sidebar.update(cx, |sidebar, cx| sidebar.set_saved_order(restored.workspace.sidebar_order.clone(), cx));
         let sidebar_events = cx.subscribe_in(&sidebar, window, |this, _, event: &SidebarEvent, window, cx| {
             this.on_sidebar_event(event.clone(), window, cx)
@@ -591,6 +621,7 @@ impl WorkspaceView {
             search_query: String::new(),
             hosts,
             ssh_hosts: cx.global::<SettingsStore>().settings().ssh_hosts.clone(),
+            hosts_with_rows: host_states.keys().cloned().collect(),
             host_states,
             queued: HashMap::new(),
             retries: HashMap::new(),
@@ -621,7 +652,11 @@ impl WorkspaceView {
             pane_dragging: false,
             sidebar,
             sidebar_bounds: Bounds::default(),
+            body_width: px(0.),
+            viewport: Size::default(),
             resizing_sidebar: false,
+            sidebar_hovered: false,
+            toggle_hovered: false,
             _sidebar_events: sidebar_events,
             launcher: None,
             recents: None,
@@ -648,11 +683,13 @@ impl WorkspaceView {
             manual_found: false,
             releases: Vec::new(),
             release_etag: None,
+            last_release_check: None,
             release_card: None,
             release_task: None,
             git: GitRepos::default(),
             git_panel_open: false,
             panel_anim: None,
+            sidebar_anim: None,
             panel_full: 0.0,
             git_tab: PanelTab::Changes,
             git_page: None,
@@ -670,7 +707,6 @@ impl WorkspaceView {
             welcome_items: RefCell::new(None),
             attention: AttentionTracker::default(),
             unseen: HashMap::new(),
-            marked_unread: HashSet::new(),
             _activation: activation,
             sent_palette: None,
             _theme: theme_changed,
@@ -692,6 +728,9 @@ impl WorkspaceView {
         for leaf in leaves {
             this.add_slot(leaf, window, cx);
         }
+        // A mark made by hand (`Leaf.unread`) outlives a restart, and so does the alert it stands on.
+        this.unseen = this.workspace.unread_leaves().map(|leaf| (leaf, AlertKind::Finished)).collect();
+        this.sync_unseen(cx);
         for (leaf, key) in &restored.attach {
             let launch = this.workspace.leaves[leaf].launch.clone();
             this.slots[leaf].view.update(cx, |view, cx| view.attach(key.pane, launch, cx));
@@ -720,6 +759,8 @@ impl WorkspaceView {
             this.refresh_host_cards(&host, cx);
         }
         this.focus_current(window, cx);
+        // A tab of a host that is not connected has no sidebar row: start on another one.
+        this.leave_off_screen_tab(window, cx);
         // Every connection starts with the GUI's colors: the daemon outlives the GUI.
         this.apply_settings(cx);
         this.save(cx);

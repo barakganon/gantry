@@ -168,7 +168,7 @@ impl WorkspaceView {
                 host: &host,
                 path: &path,
                 home: home.as_deref(),
-                connected: self.client(&host).is_some(),
+                host_tag: Some(self.client(&host).is_some()),
                 lead,
                 selected: false,
                 dimmed,
@@ -197,7 +197,7 @@ impl WorkspaceView {
                 row.on_click(cx.listener(move |this, _, window, cx| {
                     // A start waits for the daemon's container answer; a second click would open a second session.
                     if this.pending_opens.is_empty() {
-                        this.open_folder(host.clone(), path.clone(), true, None, window, cx)
+                        this.open_folder(host.clone(), path.clone(), true, None, None, window, cx)
                     }
                 }))
             })
@@ -313,7 +313,7 @@ impl WorkspaceView {
 
     pub(super) fn render_active_tab(&self, animate: bool, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = theme(cx).clone();
-        let Some(tab) = self.workspace.active_tab() else {
+        let Some(tab) = self.workspace.active_tab().filter(|_| !self.active_tab_off_screen()) else {
             return self.render_welcome(cx);
         };
         self.welcome_items.take(); // rebuilt when the screen shows again

@@ -1,20 +1,32 @@
-use super::{DialogAction, FindSession, OpenRecents, OpenSettings, TakeOverTarget, ToggleSidebar, WorkspaceView};
+use super::layout::content_width_beside;
+use super::{
+    DialogAction, FindSession, OpenRecents, OpenSettings, SIDEBAR_EDGE, SidebarAnim, TakeOverTarget, ToggleSidebar,
+    WorkspaceView,
+};
 
 use app_core::attention::AlertKind;
 use app_core::dialogs;
+use app_core::gantry_project::Assign;
+use app_core::sidebar_compact;
 use app_core::text_field::TextField;
-use gpui::{ClipboardItem, Context, Focusable, KeyDownEvent, MouseButton, MouseMoveEvent, Pixels, Point, Window};
+use gpui::{
+    ClipboardItem, Context, Focusable, IntoElement, KeyDownEvent, MouseButton, MouseMoveEvent, Pixels, Point, Window,
+    div, prelude::*, px, relative, rgb, svg,
+};
 use protocol::host::HostId;
 use protocol::message::SessionState;
+use std::time::Instant;
 
 use app_core::menus::{self, MenuAction, MenuContext, MenuEntry, MenuItem, Shortcut};
 use app_core::session_tree::{Activation, Tone, Unseen, status_tone};
 use app_core::split_tree::{DropZone, NodeId};
-use app_core::workspace::{MAX_PANES_PER_TAB, grid_slot};
+use app_core::workspace::{MAX_PANES_PER_TAB, PaneLaunch, grid_slot};
 
+use crate::assets::{CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON};
 use crate::context_menu::OpenMenu;
 use crate::field;
-use crate::settings_store::SettingsStore;
+use crate::hover_card::{self, HoverCard};
+use crate::settings_store::{SettingsStore, shortcut_label};
 use crate::sidebar_view::{RenameTarget, SidebarEvent};
 use crate::ssh_wizard::WizardStart;
 use crate::theme::theme;
@@ -23,6 +35,56 @@ const SIDEBAR_MIN: f32 = 160.0;
 const SIDEBAR_MAX: f32 = 600.0;
 
 impl WorkspaceView {
+    /// The tab on the sidebar's outer edge, halfway down, that collapses or expands it: drawn only while the pointer
+    /// is over the sidebar or the tab, and fused to the edge so it follows it while the width animates.
+    pub(super) fn render_sidebar_toggle(&self, sidebar_px: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = theme(cx).clone();
+        let compact = self.sidebar_amount() > 0.5;
+        let shown = self.sidebar_hovered || self.toggle_hovered;
+        div()
+            .id("sidebar-toggle")
+            .absolute()
+            .left(theme.ui(sidebar_px) + px(SIDEBAR_EDGE))
+            .top(relative(0.5))
+            .mt(theme.ui(-23.))
+            .w(theme.ui(16.))
+            .h(theme.ui(46.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_r(theme.ui(10.))
+            .bg(rgb(theme.tokens.raised))
+            .border_1()
+            .border_l_0()
+            .border_color(rgb(theme.tokens.line))
+            .cursor_pointer()
+            .opacity(if shown { 1.0 } else { 0.0 })
+            .hover(|style| style.border_color(rgb(theme.tokens.accent)))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                this.toggle_hovered = *hovered;
+                cx.notify();
+            }))
+            .child(
+                svg()
+                    .path(if compact { CHEVRON_RIGHT_ICON } else { CHEVRON_LEFT_ICON })
+                    .size(theme.ui(12.))
+                    .text_color(rgb(if self.toggle_hovered { theme.tokens.accent } else { theme.tokens.muted })),
+            )
+            .tooltip(hover_card::tooltip(HoverCard {
+                title: if compact { "Expand sidebar" } else { "Collapse sidebar" }.into(),
+                status: Some(shortcut_label(cx.global::<SettingsStore>().settings(), "toggleSidebar")),
+                dir: None,
+                container: false,
+                host: None,
+                folder: None,
+            }))
+            .on_click(
+                cx.listener(|this, _, window, cx| {
+                    this.set_sidebar_compact(!this.workspace.sidebar.compact, window, cx)
+                }),
+            )
+    }
+
     /// Do what a right-click menu entry says.
     /// Open the sessions picked in the sidebar as 2×2 grids, a new tab per four: closed ones are resumed first, open
     /// ones are moved out of their tabs.
@@ -91,13 +153,17 @@ impl WorkspaceView {
             MenuAction::OpenInVsCode(args) => self.open_in_vscode(args, window, cx),
             MenuAction::MarkUnread(leaf) => {
                 self.unseen.insert(leaf, AlertKind::Finished);
-                self.marked_unread.insert(leaf);
+                if self.workspace.set_unread(leaf, true) {
+                    self.save(cx);
+                }
                 self.sync_unseen(cx);
                 cx.notify();
             }
             MenuAction::MarkRead(leaf) => {
                 self.unseen.remove(&leaf);
-                self.marked_unread.remove(&leaf);
+                if self.workspace.set_unread(leaf, false) {
+                    self.save(cx);
+                }
                 self.sync_unseen(cx);
                 cx.notify();
             }
@@ -117,13 +183,32 @@ impl WorkspaceView {
             MenuAction::ClosePane(leaf) => self.confirm_close(vec![leaf], window, cx),
             MenuAction::CloseTab(index) => self.close_tab_at(index, window, cx),
             MenuAction::NewHere { dir, claude, host } if host.is_local() => {
-                self.open_new(claude, dir, None, None, host, None)
+                self.open_new(claude, dir, None, None, host, None, None)
             }
-            MenuAction::NewHere { dir, claude, host } => self.open_on_host(&host, claude, dir, window, cx),
+            MenuAction::NewHere { dir, claude, host } => self.open_on_host(&host, claude, dir, None, window, cx),
             MenuAction::NewClaudeWith { dir, dir_name } => {
                 self.remember_pick(&dir, &dir_name, cx);
-                self.open_new(true, dir, None, None, HostId::local(), Some(dir_name));
+                self.open_new(true, dir, None, None, HostId::local(), Some(dir_name), None);
             }
+            MenuAction::NewInProject { name, claude: true } => self.new_claude_in_project(&name, window, cx),
+            MenuAction::NewInProject { name, claude: false } => {
+                // A shell at once, in the home directory of this machine.
+                let home = std::env::home_dir().unwrap_or_else(|| self.default_cwd.clone());
+                let shell = cx.global::<SettingsStore>().settings().shell.clone();
+                self.open_launch(PaneLaunch::shell(home, &shell), None, None, HostId::local(), Some(name), window, cx);
+            }
+            MenuAction::RemoveFromProject(leaf) => {
+                self.on_sidebar_event(
+                    SidebarEvent::AssignToProject { source: Assign::Leaf(leaf), project: None },
+                    window,
+                    cx,
+                );
+            }
+            MenuAction::RenameProject(name) => {
+                self.set_sidebar_compact(false, window, cx);
+                self.sidebar.update(cx, |sidebar, cx| sidebar.start_project_rename(&name, window, cx));
+            }
+            MenuAction::DeleteProject(name) => self.delete_project(&name, window, cx),
             MenuAction::SetProjectColor { root, color } => SettingsStore::update(cx, |settings| match color {
                 Some(color) => {
                     settings.project_colors.folders.insert(root, color);
@@ -355,6 +440,36 @@ impl WorkspaceView {
             }
             SidebarEvent::CloseGit => self.close_git_page(window, cx),
             SidebarEvent::PicksChanged => cx.notify(),
+            SidebarEvent::StartProject => {
+                self.set_sidebar_compact(false, window, cx);
+                self.sidebar.update(cx, |sidebar, cx| sidebar.start_new_project(window, cx));
+            }
+            SidebarEvent::NewProject(name) => {
+                if self.workspace.create_project(&name).is_ok() {
+                    self.save(cx);
+                    cx.notify();
+                }
+            }
+            SidebarEvent::RenameProject { from, to } => self.rename_project(&from, &to, cx),
+            SidebarEvent::DeleteProject(name) => self.delete_project(&name, window, cx),
+            SidebarEvent::AssignToProject { source, project } => {
+                let assigned = self.workspace.assign_to_project(&source, project.as_deref());
+                match (assigned, &source, &project) {
+                    (true, ..) => {
+                        self.focus_current(window, cx);
+                        self.save(cx);
+                        cx.notify();
+                    }
+                    // Dropped on a folder heading with nothing to take it out of: as on any sidebar space, a
+                    // pane of a split tab becomes a tab of its own.
+                    (false, Assign::Leaf(leaf), None) if self.workspace.pull_out(*leaf) => {
+                        self.focus_current(window, cx);
+                        self.save(cx);
+                        cx.notify();
+                    }
+                    _ => {}
+                }
+            }
             SidebarEvent::TabMenu { index, position } => self.open_tab_menu(index, position, window, cx),
             SidebarEvent::New { claude } => self.show_launcher(claude, window, cx),
             SidebarEvent::PullOut(leaf) => {
@@ -379,6 +494,7 @@ impl WorkspaceView {
                 self.workspace.sidebar.hosts_collapsed = collapsed;
                 self.save(cx);
             }
+            SidebarEvent::ToggleCompact => self.set_sidebar_compact(!self.workspace.sidebar.compact, window, cx),
             SidebarEvent::AddSshHost => self.open_ssh_wizard(WizardStart::Add, window, cx),
             SidebarEvent::UpdateHost { host, position } => self.click_host_update(&host, position, window, cx),
         }
@@ -386,28 +502,54 @@ impl WorkspaceView {
 
     /// Start the inline rename on the sidebar, showing the sidebar first if it is hidden.
     fn start_rename(&mut self, target: RenameTarget, name: String, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.workspace.sidebar.visible {
-            self.workspace.sidebar.visible = true;
-            self.save(cx);
-            cx.notify();
-        }
+        self.set_sidebar_compact(false, window, cx);
         self.sidebar.update(cx, |sidebar, cx| sidebar.start_rename(target, &name, window, cx));
     }
 
     pub(super) fn toggle_sidebar(&mut self, _: &ToggleSidebar, window: &mut Window, cx: &mut Context<Self>) {
-        let state = &mut self.workspace.sidebar;
-        state.visible = !state.visible;
-        if !state.visible {
+        self.set_sidebar_compact(!self.workspace.sidebar.compact, window, cx);
+    }
+
+    /// Collapse the sidebar to its compact column or expand it, with the animation when it is on. Collapsing moves the
+    /// focus to the pane: the filter field it may have had is gone.
+    pub(super) fn set_sidebar_compact(&mut self, compact: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let was = self.workspace.sidebar.compact;
+        if was == compact {
+            return;
+        }
+        let theme = theme(cx).clone();
+        let at = |compact: bool| sidebar_compact::width(self.workspace.sidebar.width, f32::from(u8::from(compact)));
+        // The width the tab content has once this ends, from the body's width, so that it is right on every screen
+        // (a pane tab, Settings, the welcome screen) and when this reverses an animation under way.
+        let content_width = content_width_beside(self.body_width, theme.ui(at(compact)));
+        let animate =
+            cx.global::<SettingsStore>().settings().animate_ui && window.is_window_active() && self.body_width > px(0.);
+        let from = self.sidebar_amount();
+        self.workspace.sidebar.compact = compact;
+        self.sidebar_anim = animate.then(|| SidebarAnim {
+            started: Instant::now(),
+            from,
+            to: f32::from(u8::from(compact)),
+            content_width,
+        });
+        if compact {
             self.focus_current(window, cx);
         }
         self.save(cx);
         cx.notify();
     }
 
+    /// How compact the sidebar is drawn right now: 0 = expanded, 1 = compact, between while it animates.
+    pub(super) fn sidebar_amount(&self) -> f32 {
+        match &self.sidebar_anim {
+            Some(anim) => sidebar_compact::amount(anim.from, anim.to, anim.started.elapsed().as_secs_f32() * 1000.0),
+            None => f32::from(u8::from(self.workspace.sidebar.compact)),
+        }
+    }
+
     pub(super) fn find_session(&mut self, _: &FindSession, window: &mut Window, cx: &mut Context<Self>) {
-        self.workspace.sidebar.visible = true;
+        self.set_sidebar_compact(false, window, cx);
         self.sidebar.focus_handle(cx).focus(window, cx);
-        self.save(cx);
         cx.notify();
     }
 
