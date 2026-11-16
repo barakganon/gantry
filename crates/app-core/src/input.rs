@@ -140,6 +140,24 @@ pub fn arrow_presses(count: i32, app_cursor: bool) -> Vec<u8> {
     cursor_key(if count > 0 { 'C' } else { 'D' }, 1, app_cursor).repeat(count.unsigned_abs() as usize)
 }
 
+/// The keys that wrap a selection on the prompt in a pair when `typed` opens one (`"` `'` `` ` `` `(` `[` `{`): from
+/// the cursor to the selection's start (`moves` reach its end, `length` characters long), the opening half, to the
+/// end, the closing half.
+pub fn wrap_selection(typed: &str, moves: i32, length: usize, app_cursor: bool) -> Option<Vec<u8>> {
+    let close = match typed {
+        "\"" | "'" | "`" => typed,
+        "(" => ")",
+        "[" => "]",
+        "{" => "}",
+        _ => return None,
+    };
+    let length = length as i32;
+    Some(
+        [arrow_presses(moves - length, app_cursor), typed.into(), arrow_presses(length, app_cursor), close.into()]
+            .concat(),
+    )
+}
+
 /// Down arrows for a positive count, Up for a negative one.
 pub fn row_presses(count: i32, app_cursor: bool) -> Vec<u8> {
     cursor_key(if count > 0 { 'B' } else { 'A' }, 1, app_cursor).repeat(count.unsigned_abs() as usize)
@@ -260,6 +278,13 @@ mod tests {
         assert!(
             editing.clone().all(|a| edit_bytes(a.id).is_some() || a.id.starts_with("select") || a.id.contains("aste"))
         );
+    }
+
+    #[test]
+    fn a_pair_wraps_the_selection_and_other_keys_do_not() {
+        assert_eq!(wrap_selection("(", -1, 2, false), Some(b"\x1b[D\x1b[D\x1b[D(\x1b[C\x1b[C)".to_vec()));
+        assert_eq!(wrap_selection("\"", 0, 1, false), Some(b"\x1b[D\"\x1b[C\"".to_vec()));
+        assert_eq!(wrap_selection("a", 0, 1, false), None);
     }
 
     #[test]

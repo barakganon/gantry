@@ -15,7 +15,9 @@ use app_core::bidi::{RowOrder, logical_hit, to_display};
 use app_core::dialogs::{BarState, BarTone, PaneBar, pane_bar};
 use app_core::host_state::HostCard;
 use app_core::image_paste;
-use app_core::input::{KeyInput, ListItem, arrow_presses, edit_bytes, encode_key, list_item, row_presses};
+use app_core::input::{
+    KeyInput, ListItem, arrow_presses, edit_bytes, encode_key, list_item, row_presses, wrap_selection,
+};
 use app_core::layout::grid_dims;
 use app_core::menus::{self, MenuAction};
 use app_core::mouse::{self, MouseAction, MouseMods, encode_mouse};
@@ -574,6 +576,14 @@ impl TerminalView {
         Some(bytes)
     }
 
+    /// Typing an opening quote or bracket over a selection on the prompt wraps it in the pair.
+    fn wrap_prompt_selection(&mut self, typed: &str) -> Option<Vec<u8>> {
+        let (moves, length) = self.term.prompt_selection_edit()?;
+        let bytes = wrap_selection(typed, moves, length, self.term.key_modes().app_cursor)?;
+        self.term.clear_selection();
+        Some(bytes)
+    }
+
     /// A newline after a list item on a Claude prompt starts the next item; after an empty one it ends the list.
     fn continue_list(&self, newline: &KeyInput) -> Option<Vec<u8>> {
         if !self.launch.is_claude() {
@@ -680,6 +690,13 @@ impl TerminalView {
                 None if self.select_on_prompt(id, cx) => {}
                 None => return,
             }
+            cx.stop_propagation();
+            return;
+        }
+        if !(input.ctrl || input.alt || input.platform)
+            && let Some(bytes) = input.key_char.as_deref().and_then(|typed| self.wrap_prompt_selection(typed))
+        {
+            self.send_input(&bytes, cx);
             cx.stop_propagation();
             return;
         }
@@ -1365,6 +1382,10 @@ impl EntityInputHandler for TerminalView {
             return;
         }
         if input_fate(&self.state) == InputFate::Drop {
+            return;
+        }
+        if let Some(bytes) = self.wrap_prompt_selection(text) {
+            self.send_input(&bytes, cx);
             return;
         }
         // Typing over a selection on the prompt replaces it.
